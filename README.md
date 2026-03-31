@@ -99,6 +99,37 @@ Loads all validated tool files and registers them with a FastMCP server, accessi
 - `--host <host>` — override the server host
 - `--port <port>` — override the server port
 
+### `ui` — Web dashboard
+
+```bash
+automcp ui
+```
+
+Opens a local web dashboard at http://127.0.0.1:7860 for reviewing sessions, approving specs, browsing generated tool source code, and viewing execution logs.
+
+### `project-create` — Organize by project
+
+```bash
+automcp project-create myapp --description "My app automation"
+automcp record https://myapp.com --project myapp
+```
+
+### `secret-set` / `secret-list` — Encrypted vault
+
+```bash
+automcp secret-set MY_API_KEY sk-...
+automcp secret-list
+```
+
+Secrets are encrypted with Fernet and stored locally in `.vault.json`. The key is in `.vault.key` (both git-ignored).
+
+### `logs` — Execution history
+
+```bash
+automcp logs
+automcp logs --tool create_card
+```
+
 ---
 
 ## Architecture

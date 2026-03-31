@@ -85,13 +85,41 @@ async def run_test(tool_name: str) -> None:
         console.print(f"[red]Failed to load tool:[/] {e}")
         return
 
+    import time as _time
+    from core.storage.models import ToolExecution
+    from core.storage.db import get_db as _get_db
+
     console.print("\n[dim]Calling tool...[/]")
+    _start = _time.monotonic()
+    exec_log: ToolExecution | None = None
     try:
         result = await fn(**kwargs)
+        _duration = (_time.monotonic() - _start) * 1000
+        exec_log = ToolExecution(
+            tool_name=tool_name,
+            inputs={k: v for k, v in kwargs.items() if not k.startswith("_")},
+            result=json.dumps(result, default=str),
+            duration_ms=_duration,
+            success=True,
+        )
         result_json = json.dumps(result, indent=2, default=str)
         console.print(Panel(
             Syntax(result_json, "json", theme="monokai"),
             title="[green]Result[/]",
         ))
     except Exception as e:
+        _duration = (_time.monotonic() - _start) * 1000
+        exec_log = ToolExecution(
+            tool_name=tool_name,
+            inputs={k: v for k, v in kwargs.items() if not k.startswith("_")},
+            error=str(e),
+            duration_ms=_duration,
+            success=False,
+        )
         console.print(f"[red]Tool execution failed:[/] {e}")
+
+    if exec_log is not None:
+        _db = _get_db()
+        async with _db:
+            await _db.save_execution(exec_log)
+        console.print(f"[dim]Logged (ID: {exec_log.id[:8]}, {exec_log.duration_ms:.0f}ms)[/]")

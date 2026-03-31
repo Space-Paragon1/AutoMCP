@@ -31,12 +31,13 @@ console = Console()
 def record(
     url: str = typer.Argument(..., help="URL to open in the browser"),
     headless: bool = typer.Option(False, "--headless", help="Run browser in headless mode"),
+    project: str = typer.Option(None, "--project", "-p", help="Project name"),
 ) -> None:
     """Record network traffic from a browser session."""
-    asyncio.run(_record(url, headless))
+    asyncio.run(_record(url, headless, project))
 
 
-async def _record(url: str, headless: bool) -> None:
+async def _record(url: str, headless: bool, project: str | None = None) -> None:
     from core.recorder.browser_session import BrowserSession
 
     console.print(
@@ -48,8 +49,19 @@ async def _record(url: str, headless: bool) -> None:
         )
     )
 
+    project_id = None
+    if project:
+        from core.storage.db import get_db as _get_db
+        _db = _get_db()
+        async with _db:
+            proj = await _db.get_project_by_name(project)
+            if proj is None:
+                console.print(f"[red]Project '{project}' not found.[/] Run automcp project-create {project}")
+                raise typer.Exit(1)
+            project_id = proj.id
+
     try:
-        async with BrowserSession(url=url, headless=headless) as session:
+        async with BrowserSession(url=url, headless=headless, project_id=project_id) as session:
             # Keep alive until the browser window is closed
             while True:
                 await asyncio.sleep(1)
@@ -330,6 +342,132 @@ def sessions() -> None:
     """List all recorded browser sessions."""
     from apps.cli.sessions import run_sessions
     asyncio.run(run_sessions())
+
+
+# ---------------------------------------------------------------------------
+# ui
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def ui(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(7860, "--port", "-p"),
+):
+    """Open the AutoMCP web dashboard."""
+    from apps.web.server import run_dashboard
+    console.print(f"[bold green]AutoMCP Dashboard[/] → [cyan]http://{host}:{port}[/]")
+    run_dashboard(host=host, port=port)
+
+
+# ---------------------------------------------------------------------------
+# project-create
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def project_create(
+    name: str = typer.Argument(..., help="Project name"),
+    description: str = typer.Option("", "--description", "-d"),
+):
+    """Create a new project to group recording sessions."""
+    asyncio.run(_project_create(name, description))
+
+
+async def _project_create(name: str, description: str) -> None:
+    from core.storage.db import get_db
+    from core.storage.models import Project
+    project = Project(name=name, description=description)
+    db = get_db()
+    async with db:
+        await db.save_project(project)
+    console.print(f"[green]Project created:[/] {name} (ID: {project.id[:8]})")
+
+
+# ---------------------------------------------------------------------------
+# secret-set / secret-get / secret-list
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def secret_set(
+    key: str = typer.Argument(..., help="Secret name"),
+    value: str = typer.Argument(..., help="Secret value"),
+):
+    """Store an encrypted secret in the local vault."""
+    from core.auth.vault import get_vault
+    get_vault().set(key, value)
+    console.print(f"[green]Secret stored:[/] {key}")
+
+
+@app.command()
+def secret_get(
+    key: str = typer.Argument(..., help="Secret name"),
+):
+    """Retrieve a secret from the vault."""
+    from core.auth.vault import get_vault
+    value = get_vault().get(key)
+    if value is None:
+        console.print(f"[red]Secret not found:[/] {key}")
+        raise typer.Exit(1)
+    console.print(value)
+
+
+@app.command()
+def secret_list():
+    """List all secret keys stored in the vault."""
+    from core.auth.vault import get_vault
+    from rich.table import Table
+    keys = get_vault().list_keys()
+    if not keys:
+        console.print("[dim]No secrets stored.[/]")
+        return
+    table = Table(title="Vault Secrets")
+    table.add_column("Key", style="cyan")
+    for k in keys:
+        table.add_row(k)
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# logs
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def logs(
+    tool: str = typer.Option(None, "--tool", "-t", help="Filter by tool name"),
+    limit: int = typer.Option(20, "--limit", "-n"),
+):
+    """Show tool execution logs."""
+    asyncio.run(_logs(tool, limit))
+
+
+async def _logs(tool_name: str | None, limit: int) -> None:
+    from core.storage.db import get_db
+    from rich.table import Table
+    db = get_db()
+    async with db:
+        executions = await db.get_executions(tool_name=tool_name, limit=limit)
+    if not executions:
+        console.print("[dim]No executions logged yet.[/]")
+        return
+    table = Table(title="Tool Execution Log")
+    table.add_column("ID", style="dim")
+    table.add_column("Tool", style="cyan")
+    table.add_column("Status")
+    table.add_column("Duration")
+    table.add_column("Executed At")
+    for ex in executions:
+        status = "[green]OK[/]" if ex.success else "[red]ERR[/]"
+        table.add_row(
+            ex.id[:8],
+            ex.tool_name,
+            status,
+            f"{ex.duration_ms:.0f}ms",
+            ex.executed_at.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------

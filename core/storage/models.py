@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -72,6 +73,7 @@ class RecordingSession(BaseModel):
     ended_at: datetime | None = None
     browser_context_state: dict = Field(default_factory=dict)
     request_count: int = 0
+    project_id: str | None = None
 
 
 class EndpointCluster(BaseModel):
@@ -98,3 +100,22 @@ class GeneratedTool(BaseModel):
 class ValidationResult(BaseModel):
     is_valid: bool
     errors: list[str] = Field(default_factory=list)
+
+
+class Project(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    name: str
+    description: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    site_urls: list[str] = Field(default=[])
+
+
+class ToolExecution(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    tool_name: str
+    inputs: dict = Field(default={})
+    result: str | None = None
+    error: str | None = None
+    duration_ms: float = 0.0
+    executed_at: datetime = Field(default_factory=datetime.utcnow)
+    success: bool = True
