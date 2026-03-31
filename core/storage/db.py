@@ -111,6 +111,18 @@ class AsyncDatabase:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(SCHEMA_SQL)
         await self._conn.commit()
+        for stmt in [
+            "ALTER TABLE tool_specs ADD COLUMN approved INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE tool_specs ADD COLUMN is_readonly INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE tool_specs ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE tool_specs ADD COLUMN response_schema TEXT",
+            "ALTER TABLE generated_tools ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+        ]:
+            try:
+                await self._conn.execute(stmt)
+            except Exception:
+                pass  # Column already exists
+        await self._conn.commit()
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -241,13 +253,15 @@ class AsyncDatabase:
 
     async def save_tool_spec(self, spec: ToolSpec) -> None:
         quality_json = spec.quality_score.model_dump_json() if spec.quality_score else None
+        response_schema_json = json.dumps(spec.response_schema) if spec.response_schema else None
         await self.conn.execute(
             """
             INSERT OR REPLACE INTO tool_specs
                 (spec_id, session_id, tool_name, purpose, method, url_template,
                  auth_strategy, csrf_strategy, inputs, request_mapping,
-                 response_type, confidence, quality_score, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 response_type, confidence, quality_score, created_at,
+                 approved, is_readonly, version, response_schema)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 spec.spec_id,
@@ -264,8 +278,34 @@ class AsyncDatabase:
                 spec.confidence,
                 quality_json,
                 spec.created_at.isoformat(),
+                int(spec.approved),
+                int(spec.is_readonly),
+                spec.version,
+                response_schema_json,
             ),
         )
+        await self.conn.commit()
+
+    async def update_tool_spec(self, spec_id: str, **kwargs: Any) -> None:
+        allowed_fields = {"approved", "is_readonly", "version", "tool_name", "purpose", "response_schema"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
+        if not updates:
+            return
+        set_clauses = []
+        values = []
+        for field, value in updates.items():
+            set_clauses.append(f"{field} = ?")
+            if field == "approved":
+                values.append(int(value))
+            elif field == "is_readonly":
+                values.append(int(value))
+            elif field == "response_schema":
+                values.append(json.dumps(value) if value is not None else None)
+            else:
+                values.append(value)
+        values.append(spec_id)
+        sql = f"UPDATE tool_specs SET {', '.join(set_clauses)} WHERE spec_id = ?"
+        await self.conn.execute(sql, values)
         await self.conn.commit()
 
     async def get_tool_specs(self, session_id: str | None = None) -> list[ToolSpec]:
@@ -291,6 +331,10 @@ class AsyncDatabase:
             inputs_raw = json.loads(row["inputs"])
             inputs = [ToolInput.model_validate(i) for i in inputs_raw]
 
+            response_schema = None
+            if row["response_schema"]:
+                response_schema = json.loads(row["response_schema"])
+
             specs.append(
                 ToolSpec(
                     spec_id=row["spec_id"],
@@ -307,6 +351,10 @@ class AsyncDatabase:
                     confidence=row["confidence"],
                     quality_score=quality,
                     created_at=datetime.fromisoformat(row["created_at"]),
+                    approved=bool(row["approved"]),
+                    is_readonly=bool(row["is_readonly"]),
+                    version=row["version"],
+                    response_schema=response_schema,
                 )
             )
         return specs
@@ -328,6 +376,10 @@ class AsyncDatabase:
         inputs_raw = json.loads(row["inputs"])
         inputs = [ToolInput.model_validate(i) for i in inputs_raw]
 
+        response_schema = None
+        if row["response_schema"]:
+            response_schema = json.loads(row["response_schema"])
+
         return ToolSpec(
             spec_id=row["spec_id"],
             session_id=row["session_id"],
@@ -343,6 +395,10 @@ class AsyncDatabase:
             confidence=row["confidence"],
             quality_score=quality,
             created_at=datetime.fromisoformat(row["created_at"]),
+            approved=bool(row["approved"]),
+            is_readonly=bool(row["is_readonly"]),
+            version=row["version"],
+            response_schema=response_schema,
         )
 
     # -------------------------------------------------------------------------

@@ -81,48 +81,6 @@ async def _record(url: str, headless: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# sessions (helper command)
-# ---------------------------------------------------------------------------
-
-
-@app.command()
-def sessions() -> None:
-    """List all recorded sessions."""
-    asyncio.run(_sessions())
-
-
-async def _sessions() -> None:
-    from core.storage.db import get_db
-
-    db = get_db()
-    async with db:
-        async with db.conn.execute(
-            "SELECT id, url, started_at, request_count FROM sessions ORDER BY started_at DESC LIMIT 20"
-        ) as cursor:
-            rows = await cursor.fetchall()
-
-    if not rows:
-        console.print("[yellow]No sessions recorded yet.[/]")
-        return
-
-    table = Table(title="Recorded Sessions")
-    table.add_column("Session ID", style="cyan")
-    table.add_column("URL")
-    table.add_column("Started At")
-    table.add_column("Requests", justify="right")
-
-    for row in rows:
-        table.add_row(
-            row["id"][:16] + "...",
-            row["url"][:60],
-            row["started_at"][:19],
-            str(row["request_count"]),
-        )
-
-    console.print(table)
-
-
-# ---------------------------------------------------------------------------
 # analyze
 # ---------------------------------------------------------------------------
 
@@ -239,7 +197,7 @@ async def _analyze(
     console.print(table)
     console.print(f"\nSpecs saved to [cyan]{out_path}[/]")
     console.print(
-        f"Run [bold]automcp generate {session_id}[/] to generate MCP tools"
+        f"Run [bold]automcp review {session_id}[/] to approve specs before generating"
     )
 
 
@@ -274,6 +232,12 @@ async def _generate(session_id: str, output_dir: Path | None) -> None:
         console.print(f"[red]No tool specs found for session {session_id}[/]")
         console.print(f"Run [bold]automcp analyze {session_id}[/] first")
         raise typer.Exit(1)
+
+    specs = [s for s in specs if s.approved]
+    if not specs:
+        console.print("[yellow]No approved specs found.[/]")
+        console.print(f"Run [bold]automcp review {session_id}[/] to approve specs first")
+        raise typer.Exit(0)
 
     generator = PythonMcpGenerator(output_dir=out_dir)
     validator = CodeValidator()
@@ -326,6 +290,46 @@ def serve(
     from core.runtime.server import run_server
 
     run_server(host=host, port=port)
+
+
+# ---------------------------------------------------------------------------
+# review
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def review(
+    session_id: str = typer.Argument(..., help="Session ID to review specs for"),
+) -> None:
+    """Interactively review and approve generated tool specs."""
+    from apps.cli.review import run_review
+    asyncio.run(run_review(session_id))
+
+
+# ---------------------------------------------------------------------------
+# test
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def test(
+    tool_name: str = typer.Argument(..., help="Name of the tool to test"),
+) -> None:
+    """Run a generated tool interactively to verify it works."""
+    from apps.cli.test_tool import run_test
+    asyncio.run(run_test(tool_name))
+
+
+# ---------------------------------------------------------------------------
+# sessions
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def sessions() -> None:
+    """List all recorded browser sessions."""
+    from apps.cli.sessions import run_sessions
+    asyncio.run(run_sessions())
 
 
 # ---------------------------------------------------------------------------
