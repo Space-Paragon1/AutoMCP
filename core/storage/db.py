@@ -12,7 +12,9 @@ from core.storage.models import (
     CapturedRequest,
     EndpointCluster,
     GeneratedTool,
+    Project,
     RecordingSession,
+    ToolExecution,
     ToolSpec,
 )
 
@@ -86,6 +88,25 @@ CREATE INDEX IF NOT EXISTS idx_requests_session ON captured_requests(session_id)
 CREATE INDEX IF NOT EXISTS idx_specs_session ON tool_specs(session_id);
 CREATE INDEX IF NOT EXISTS idx_tools_spec ON generated_tools(spec_id);
 CREATE INDEX IF NOT EXISTS idx_clusters_session ON endpoint_clusters(session_id);
+
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    site_urls TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS executions (
+    id TEXT PRIMARY KEY,
+    tool_name TEXT NOT NULL,
+    inputs TEXT NOT NULL DEFAULT '{}',
+    result TEXT,
+    error TEXT,
+    duration_ms REAL NOT NULL DEFAULT 0.0,
+    executed_at TEXT NOT NULL,
+    success INTEGER NOT NULL DEFAULT 1
+);
 """
 
 
@@ -117,6 +138,7 @@ class AsyncDatabase:
             "ALTER TABLE tool_specs ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE tool_specs ADD COLUMN response_schema TEXT",
             "ALTER TABLE generated_tools ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE sessions ADD COLUMN project_id TEXT",
         ]:
             try:
                 await self._conn.execute(stmt)
@@ -150,8 +172,8 @@ class AsyncDatabase:
         await self.conn.execute(
             """
             INSERT OR REPLACE INTO sessions
-                (id, url, started_at, ended_at, browser_context_state, request_count)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (id, url, started_at, ended_at, browser_context_state, request_count, project_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session.id,
@@ -160,6 +182,7 @@ class AsyncDatabase:
                 _dt_str(session.ended_at),
                 json.dumps(session.browser_context_state),
                 session.request_count,
+                session.project_id,
             ),
         )
         await self.conn.commit()
@@ -190,6 +213,7 @@ class AsyncDatabase:
             ended_at=_dt(row["ended_at"]),
             browser_context_state=json.loads(row["browser_context_state"]),
             request_count=row["request_count"],
+            project_id=row["project_id"] if "project_id" in row.keys() else None,
         )
 
     # -------------------------------------------------------------------------
@@ -504,6 +528,128 @@ class AsyncDatabase:
                 representative_request_id=row["representative_request_id"],
                 action_labels=json.loads(row["action_labels"]),
                 body_schema=json.loads(row["body_schema"]) if row["body_schema"] else None,
+            )
+            for row in rows
+        ]
+
+
+    # -------------------------------------------------------------------------
+    # Projects
+    # -------------------------------------------------------------------------
+
+    async def save_project(self, project: Project) -> None:
+        await self.conn.execute(
+            """
+            INSERT OR REPLACE INTO projects
+                (id, name, description, created_at, site_urls)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                project.id,
+                project.name,
+                project.description,
+                project.created_at.isoformat(),
+                json.dumps(project.site_urls),
+            ),
+        )
+        await self.conn.commit()
+
+    async def get_project(self, project_id: str) -> Project | None:
+        async with self.conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return Project(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            site_urls=json.loads(row["site_urls"]),
+        )
+
+    async def get_projects(self) -> list[Project]:
+        async with self.conn.execute(
+            "SELECT * FROM projects ORDER BY created_at ASC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            Project(
+                id=row["id"],
+                name=row["name"],
+                description=row["description"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                site_urls=json.loads(row["site_urls"]),
+            )
+            for row in rows
+        ]
+
+    async def get_project_by_name(self, name: str) -> Project | None:
+        async with self.conn.execute(
+            "SELECT * FROM projects WHERE name = ?", (name,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return Project(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            site_urls=json.loads(row["site_urls"]),
+        )
+
+    # -------------------------------------------------------------------------
+    # Tool Executions
+    # -------------------------------------------------------------------------
+
+    async def save_execution(self, execution: ToolExecution) -> None:
+        await self.conn.execute(
+            """
+            INSERT OR REPLACE INTO executions
+                (id, tool_name, inputs, result, error, duration_ms, executed_at, success)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                execution.id,
+                execution.tool_name,
+                json.dumps(execution.inputs),
+                execution.result,
+                execution.error,
+                execution.duration_ms,
+                execution.executed_at.isoformat(),
+                int(execution.success),
+            ),
+        )
+        await self.conn.commit()
+
+    async def get_executions(
+        self, tool_name: str | None = None, limit: int = 50
+    ) -> list[ToolExecution]:
+        if tool_name is not None:
+            query = (
+                "SELECT * FROM executions WHERE tool_name = ? "
+                "ORDER BY executed_at DESC LIMIT ?"
+            )
+            params: tuple = (tool_name, limit)
+        else:
+            query = "SELECT * FROM executions ORDER BY executed_at DESC LIMIT ?"
+            params = (limit,)
+
+        async with self.conn.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+
+        return [
+            ToolExecution(
+                id=row["id"],
+                tool_name=row["tool_name"],
+                inputs=json.loads(row["inputs"]),
+                result=row["result"],
+                error=row["error"],
+                duration_ms=row["duration_ms"],
+                executed_at=datetime.fromisoformat(row["executed_at"]),
+                success=bool(row["success"]),
             )
             for row in rows
         ]

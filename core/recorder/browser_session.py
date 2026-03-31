@@ -33,10 +33,12 @@ class BrowserSession:
         url: str,
         headless: bool = False,
         user_data_dir: str | None = None,
+        project_id: str | None = None,
     ) -> None:
         self._url = url
         self._headless = headless
         self._user_data_dir = user_data_dir
+        self._project_id = project_id
 
         self._session_id: str = str(uuid.uuid4())
         self._started_at: datetime = datetime.utcnow()
@@ -94,6 +96,7 @@ class BrowserSession:
             id=self._session_id,
             url=self._url,
             started_at=self._started_at,
+            project_id=self._project_id,
         )
         db = get_db()
         async with db:

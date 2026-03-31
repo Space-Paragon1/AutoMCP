@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoMCP 2.0 Dashboard</title>
+<style>
+/* dark theme, sidebar layout */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; display: flex; height: 100vh; overflow: hidden; }
+#sidebar { width: 220px; background: #1a1d27; border-right: 1px solid #2d3148; padding: 24px 0; display: flex; flex-direction: column; }
+#sidebar h1 { font-size: 1.1rem; font-weight: 700; color: #7c3aed; padding: 0 20px 24px; border-bottom: 1px solid #2d3148; }
+#sidebar h1 span { color: #a78bfa; }
+nav a { display: block; padding: 12px 20px; color: #94a3b8; text-decoration: none; font-size: 0.9rem; cursor: pointer; transition: all 0.15s; }
+nav a:hover, nav a.active { background: #252840; color: #e2e8f0; border-left: 3px solid #7c3aed; }
+#main { flex: 1; overflow-y: auto; padding: 32px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
+.stat-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 20px; }
+.stat-card .label { font-size: 0.8rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-card .value { font-size: 2rem; font-weight: 700; color: #a78bfa; margin-top: 4px; }
+.panel { display: none; }
+.panel.active { display: block; }
+h2 { font-size: 1.1rem; color: #e2e8f0; margin-bottom: 16px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+th { text-align: left; padding: 10px 12px; color: #64748b; font-weight: 500; border-bottom: 1px solid #2d3148; font-size: 0.8rem; text-transform: uppercase; }
+td { padding: 10px 12px; border-bottom: 1px solid #1e2235; color: #cbd5e1; }
+tr:hover td { background: #1e2235; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.badge-green { background: #064e3b; color: #34d399; }
+.badge-red { background: #4c1d1d; color: #f87171; }
+.badge-blue { background: #1e3a5f; color: #60a5fa; }
+.badge-yellow { background: #451a03; color: #fbbf24; }
+input[type=checkbox] { accent-color: #7c3aed; width: 16px; height: 16px; cursor: pointer; }
+#source-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
+#source-modal.open { display: flex; }
+#source-box { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; width: 80vw; max-height: 80vh; display: flex; flex-direction: column; }
+#source-box header { padding: 16px 20px; border-bottom: 1px solid #2d3148; display: flex; justify-content: space-between; align-items: center; }
+#source-box pre { overflow: auto; padding: 20px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.8rem; color: #a5f3fc; flex: 1; }
+#close-modal { background: none; border: none; color: #64748b; font-size: 1.2rem; cursor: pointer; }
+#close-modal:hover { color: #e2e8f0; }
+.method-get { color: #34d399; }
+.method-post { color: #60a5fa; }
+.method-put { color: #fbbf24; }
+.method-patch { color: #f97316; }
+.method-delete { color: #f87171; }
+.truncate { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>Auto<span>MCP</span> 2.0</h1>
+  <nav>
+    <a class="active" onclick="showPanel('sessions')">Sessions</a>
+    <a onclick="showPanel('specs')">Specs</a>
+    <a onclick="showPanel('tools')">Tools</a>
+    <a onclick="showPanel('executions')">Executions</a>
+    <a onclick="showPanel('projects')">Projects</a>
+  </nav>
+</div>
+
+<div id="main">
+  <div class="stats">
+    <div class="stat-card"><div class="label">Sessions</div><div class="value" id="stat-sessions">{{ total_sessions }}</div></div>
+    <div class="stat-card"><div class="label">Specs</div><div class="value" id="stat-specs">{{ total_specs }}</div></div>
+    <div class="stat-card"><div class="label">Approved</div><div class="value" id="stat-approved">{{ approved_specs }}</div></div>
+    <div class="stat-card"><div class="label">Tools</div><div class="value" id="stat-tools">{{ valid_tools }}</div></div>
+  </div>
+
+  <div id="panel-sessions" class="panel active">
+    <h2>Recording Sessions</h2>
+    <table id="sessions-table">
+      <thead><tr><th>Session ID</th><th>URL</th><th>Recorded At</th><th>Requests</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="panel-specs" class="panel">
+    <h2>Tool Specs</h2>
+    <table id="specs-table">
+      <thead><tr><th>Tool Name</th><th>Method</th><th>URL</th><th>Confidence</th><th>Approved</th><th>Read-only</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="panel-tools" class="panel">
+    <h2>Generated Tools <span style="font-size:0.8rem;color:#64748b">(click row to view source)</span></h2>
+    <table id="tools-table">
+      <thead><tr><th>Tool Name</th><th>File</th><th>Valid</th><th>Generated At</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="panel-executions" class="panel">
+    <h2>Execution Log</h2>
+    <table id="executions-table">
+      <thead><tr><th>ID</th><th>Tool</th><th>Status</th><th>Duration</th><th>Executed At</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="panel-projects" class="panel">
+    <h2>Projects</h2>
+    <table id="projects-table">
+      <thead><tr><th>Name</th><th>Description</th><th>ID</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="source-modal">
+  <div id="source-box">
+    <header>
+      <span id="source-title" style="font-size:0.9rem;color:#a78bfa;font-family:monospace"></span>
+      <button id="close-modal" onclick="closeModal()">&#x2715;</button>
+    </header>
+    <pre id="source-code"></pre>
+  </div>
+</div>
+
+<script>
+const panels = ['sessions','specs','tools','executions','projects'];
+
+function showPanel(name) {
+  panels.forEach(function(p) {
+    document.getElementById('panel-' + p).classList.remove('active');
+  });
+  document.getElementById('panel-' + name).classList.add('active');
+  document.querySelectorAll('nav a').forEach(function(a, i) {
+    a.classList.toggle('active', panels[i] === name);
+  });
+  loadPanel(name);
+}
+
+function methodBadge(method) {
+  var cls = 'method-' + (method || '').toLowerCase();
+  return '<span class="' + cls + '">' + method + '</span>';
+}
+
+function loadPanel(name) {
+  if (name === 'sessions') loadSessions();
+  else if (name === 'specs') loadSpecs();
+  else if (name === 'tools') loadTools();
+  else if (name === 'executions') loadExecutions();
+  else if (name === 'projects') loadProjects();
+}
+
+async function loadSessions() {
+  var data = await fetch('/api/sessions').then(function(r) { return r.json(); });
+  var tbody = document.querySelector('#sessions-table tbody');
+  tbody.innerHTML = data.map(function(s) {
+    return '<tr>' +
+      '<td><code style="color:#a78bfa">' + s.short_id + '</code></td>' +
+      '<td class="truncate">' + s.url + '</td>' +
+      '<td>' + s.started_at + '</td>' +
+      '<td>' + s.request_count + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function loadSpecs() {
+  var data = await fetch('/api/specs').then(function(r) { return r.json(); });
+  var tbody = document.querySelector('#specs-table tbody');
+  tbody.innerHTML = data.map(function(s) {
+    return '<tr>' +
+      '<td><code style="color:#a78bfa">' + s.tool_name + '</code></td>' +
+      '<td>' + methodBadge(s.method) + '</td>' +
+      '<td class="truncate" title="' + s.url_template + '">' + s.url_template + '</td>' +
+      '<td>' + (s.confidence * 100).toFixed(0) + '%</td>' +
+      '<td><input type="checkbox" ' + (s.approved ? 'checked' : '') + ' onchange="toggleSpec(\'' + s.spec_id + '\', \'approved\', this.checked)"></td>' +
+      '<td><input type="checkbox" ' + (s.is_readonly ? 'checked' : '') + ' onchange="toggleSpec(\'' + s.spec_id + '\', \'is_readonly\', this.checked)"></td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function toggleSpec(specId, field, value) {
+  var body = {};
+  body[field] = value;
+  await fetch('/api/specs/' + specId, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+}
+
+async function loadTools() {
+  var data = await fetch('/api/tools').then(function(r) { return r.json(); });
+  var tbody = document.querySelector('#tools-table tbody');
+  tbody.innerHTML = data.map(function(t) {
+    var filename = t.file_path.split('/').pop().split('\\').pop();
+    var validBadge = t.validation_status === 'valid'
+      ? '<span class="badge badge-green">&#x2713; valid</span>'
+      : '<span class="badge badge-red">&#x2717; invalid</span>';
+    var genAt = t.generated_at ? t.generated_at.slice(0,19).replace('T',' ') : '&mdash;';
+    return '<tr style="cursor:pointer" onclick="showSource(\'' + t.tool_name + '\')">' +
+      '<td><code style="color:#a78bfa">' + t.tool_name + '</code></td>' +
+      '<td style="color:#64748b;font-size:0.8rem">' + filename + '</td>' +
+      '<td>' + validBadge + '</td>' +
+      '<td style="color:#64748b;font-size:0.8rem">' + genAt + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function showSource(toolName) {
+  document.getElementById('source-title').textContent = toolName + '.py';
+  document.getElementById('source-code').textContent = 'Loading...';
+  document.getElementById('source-modal').classList.add('open');
+  var data = await fetch('/api/tools/' + toolName + '/source')
+    .then(function(r) { return r.json(); })
+    .catch(function() { return {source: 'Error loading source'}; });
+  document.getElementById('source-code').textContent = data.source || 'Not found';
+}
+
+function closeModal() {
+  document.getElementById('source-modal').classList.remove('open');
+}
+
+async function loadExecutions() {
+  var data = await fetch('/api/executions').then(function(r) { return r.json(); });
+  var tbody = document.querySelector('#executions-table tbody');
+  tbody.innerHTML = data.map(function(e) {
+    var statusBadge = e.success
+      ? '<span class="badge badge-green">OK</span>'
+      : '<span class="badge badge-red">ERR</span>';
+    var execAt = e.executed_at ? e.executed_at.slice(0,19).replace('T',' ') : '&mdash;';
+    return '<tr>' +
+      '<td><code style="color:#64748b;font-size:0.8rem">' + e.id.slice(0,8) + '</code></td>' +
+      '<td><code style="color:#a78bfa">' + e.tool_name + '</code></td>' +
+      '<td>' + statusBadge + '</td>' +
+      '<td>' + e.duration_ms.toFixed(0) + 'ms</td>' +
+      '<td style="color:#64748b;font-size:0.8rem">' + execAt + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function loadProjects() {
+  var data = await fetch('/api/projects').then(function(r) { return r.json(); });
+  var tbody = document.querySelector('#projects-table tbody');
+  if (!data.length) {
+    tbody.innerHTML = '<tr><td colspan="3" style="color:#64748b;text-align:center;padding:24px">No projects yet. Run <code>automcp project-create &lt;name&gt;</code></td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.map(function(p) {
+    return '<tr>' +
+      '<td style="color:#a78bfa">' + p.name + '</td>' +
+      '<td style="color:#94a3b8">' + (p.description || '&mdash;') + '</td>' +
+      '<td><code style="color:#64748b;font-size:0.8rem">' + p.id.slice(0,8) + '</code></td>' +
+      '</tr>';
+  }).join('');
+}
+
+// Load initial panel
+loadSessions();
+</script>
+</body>
+</html>

@@ -1,3 +1,5 @@
 .env
 .claude/
 automcp.db
+.vault.key
+.vault.json
