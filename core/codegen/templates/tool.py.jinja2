@@ -17,7 +17,7 @@ class {{ spec.tool_name | to_title_case }}Input:
 {% endif %}
 
 async def {{ spec.tool_name }}(
-{% for inp in spec.inputs %}
+{% for inp in spec.inputs | sort(attribute='required', reverse=True) %}
     {{ inp.name }}: {{ inp.type | python_type }}{% if not inp.required %} | None = None{% endif %},
 {% endfor %}
     _cookies: dict[str, str] | None = None,

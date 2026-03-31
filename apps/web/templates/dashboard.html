@@ -3,254 +3,2040 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AutoMCP 2.0 Dashboard</title>
+<title>AutoMCP 2.0 — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
 <style>
-/* dark theme, sidebar layout */
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; display: flex; height: 100vh; overflow: hidden; }
-#sidebar { width: 220px; background: #1a1d27; border-right: 1px solid #2d3148; padding: 24px 0; display: flex; flex-direction: column; }
-#sidebar h1 { font-size: 1.1rem; font-weight: 700; color: #7c3aed; padding: 0 20px 24px; border-bottom: 1px solid #2d3148; }
-#sidebar h1 span { color: #a78bfa; }
-nav a { display: block; padding: 12px 20px; color: #94a3b8; text-decoration: none; font-size: 0.9rem; cursor: pointer; transition: all 0.15s; }
-nav a:hover, nav a.active { background: #252840; color: #e2e8f0; border-left: 3px solid #7c3aed; }
-#main { flex: 1; overflow-y: auto; padding: 32px; }
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
-.stat-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; padding: 20px; }
-.stat-card .label { font-size: 0.8rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
-.stat-card .value { font-size: 2rem; font-weight: 700; color: #a78bfa; margin-top: 4px; }
+/* ─── Reset & base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #080b14;
+  --surface:   #0e1117;
+  --surface-2: #141720;
+  --surface-3: #1c2030;
+  --border:    #1e2235;
+  --border-2:  #252a40;
+  --text-1:    #e8ecf4;
+  --text-2:    #8892b0;
+  --text-3:    #4a5270;
+  --purple:    #7c3aed;
+  --purple-2:  #6d28d9;
+  --indigo:    #4f46e5;
+  --cyan:      #06b6d4;
+  --green:     #10b981;
+  --yellow:    #f59e0b;
+  --red:       #ef4444;
+  --blue:      #3b82f6;
+}
+
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text-1);
+  display: flex;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Scrollbar ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* ─── Sidebar ──────────────────────────────────────────────────────────────── */
+#sidebar {
+  width: 256px;
+  min-width: 256px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 50;
+}
+
+.sidebar-logo {
+  padding: 20px 20px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-icon {
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, var(--purple), var(--indigo));
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 0 16px rgba(124,58,237,0.35);
+}
+
+.logo-icon svg { width: 16px; height: 16px; }
+
+.logo-text {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #c4b5fd, #818cf8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.logo-version {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 2px;
+  -webkit-text-fill-color: var(--text-3);
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-section-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  padding: 8px 10px 4px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 6px;
+  color: var(--text-2);
+  text-decoration: none;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+  position: relative;
+  user-select: none;
+}
+
+.nav-item:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+}
+
+.nav-item.active {
+  background: var(--surface-3);
+  color: #fff;
+  border-color: transparent;
+}
+
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  background: linear-gradient(180deg, var(--purple), var(--indigo));
+  border-radius: 0 2px 2px 0;
+}
+
+.nav-item svg { width: 16px; height: 16px; flex-shrink: 0; opacity: 0.7; }
+.nav-item.active svg { opacity: 1; }
+
+.sidebar-footer {
+  padding: 12px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.nav-item-ext {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 6px;
+  color: var(--text-3);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.nav-item-ext:hover { color: var(--text-2); background: var(--surface-2); }
+.nav-item-ext svg { width: 14px; height: 14px; }
+
+/* ─── Layout shell ─────────────────────────────────────────────────────────── */
+#app {
+  margin-left: 256px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: calc(100vw - 256px);
+}
+
+/* ─── Top bar ──────────────────────────────────────────────────────────────── */
+#topbar {
+  height: 56px;
+  min-height: 56px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 16px;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-3);
+  flex: 1;
+}
+
+.breadcrumb-sep { color: var(--text-3); opacity: 0.4; }
+
+.breadcrumb-current {
+  color: var(--text-1);
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-wrap svg {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+#global-search {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 12px 6px 32px;
+  color: var(--text-1);
+  font-size: 0.8rem;
+  font-family: 'Inter', sans-serif;
+  width: 220px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+#global-search::placeholder { color: var(--text-3); }
+#global-search:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(124,58,237,0.12); }
+
+.btn-icon {
+  width: 34px;
+  height: 34px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-2);
+  transition: all 0.15s;
+}
+
+.btn-icon:hover { background: var(--surface-3); color: var(--text-1); border-color: var(--border-2); }
+.btn-icon svg { width: 15px; height: 15px; }
+
+/* ─── Main content ─────────────────────────────────────────────────────────── */
+#main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px;
+}
+
+/* ─── Panel transitions ────────────────────────────────────────────────────── */
 .panel { display: none; }
-.panel.active { display: block; }
-h2 { font-size: 1.1rem; color: #e2e8f0; margin-bottom: 16px; }
-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
-th { text-align: left; padding: 10px 12px; color: #64748b; font-weight: 500; border-bottom: 1px solid #2d3148; font-size: 0.8rem; text-transform: uppercase; }
-td { padding: 10px 12px; border-bottom: 1px solid #1e2235; color: #cbd5e1; }
-tr:hover td { background: #1e2235; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
-.badge-green { background: #064e3b; color: #34d399; }
-.badge-red { background: #4c1d1d; color: #f87171; }
-.badge-blue { background: #1e3a5f; color: #60a5fa; }
-.badge-yellow { background: #451a03; color: #fbbf24; }
-input[type=checkbox] { accent-color: #7c3aed; width: 16px; height: 16px; cursor: pointer; }
-#source-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
-#source-modal.open { display: flex; }
-#source-box { background: #1a1d27; border: 1px solid #2d3148; border-radius: 8px; width: 80vw; max-height: 80vh; display: flex; flex-direction: column; }
-#source-box header { padding: 16px 20px; border-bottom: 1px solid #2d3148; display: flex; justify-content: space-between; align-items: center; }
-#source-box pre { overflow: auto; padding: 20px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.8rem; color: #a5f3fc; flex: 1; }
-#close-modal { background: none; border: none; color: #64748b; font-size: 1.2rem; cursor: pointer; }
-#close-modal:hover { color: #e2e8f0; }
-.method-get { color: #34d399; }
-.method-post { color: #60a5fa; }
-.method-put { color: #fbbf24; }
-.method-patch { color: #f97316; }
-.method-delete { color: #f87171; }
-.truncate { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel.active {
+  display: block;
+  animation: panelIn 0.2s ease forwards;
+}
+
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Section heading ──────────────────────────────────────────────────────── */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.section-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: -0.02em;
+}
+
+.section-sub {
+  font-size: 0.8rem;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+/* ─── Stats grid ───────────────────────────────────────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: 10px 0 0 10px;
+}
+
+.stat-card.accent-purple::before { background: var(--purple); }
+.stat-card.accent-cyan::before   { background: var(--cyan); }
+.stat-card.accent-green::before  { background: var(--green); }
+.stat-card.accent-indigo::before { background: var(--indigo); }
+
+.stat-card:hover { border-color: var(--border-2); }
+
+.stat-icon {
+  position: absolute;
+  top: 16px; right: 16px;
+  width: 36px; height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stat-icon svg { width: 18px; height: 18px; }
+.stat-icon.purple { background: rgba(124,58,237,0.12); color: var(--purple); }
+.stat-icon.cyan   { background: rgba(6,182,212,0.12);  color: var(--cyan); }
+.stat-icon.green  { background: rgba(16,185,129,0.12); color: var(--green); }
+.stat-icon.indigo { background: rgba(79,70,229,0.12);  color: var(--indigo); }
+
+.stat-label {
+  font-size: 0.73rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+
+.stat-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.stat-trend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.stat-trend.up   { color: var(--green); }
+.stat-trend.down { color: var(--red); }
+.stat-trend.neutral { color: var(--text-3); }
+.stat-trend svg { width: 12px; height: 12px; }
+
+/* ─── Card / table wrapper ─────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.card-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.card-count {
+  font-size: 0.73rem;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 1px 8px;
+  color: var(--text-3);
+}
+
+/* ─── Table ────────────────────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+
+thead th {
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+thead th.right { text-align: right; }
+
+tbody td {
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  vertical-align: middle;
+}
+
+tbody tr:last-child td { border-bottom: none; }
+
+tbody tr {
+  transition: background 0.1s;
+}
+
+tbody tr.clickable {
+  cursor: pointer;
+}
+
+tbody tr.clickable:hover td {
+  background: rgba(124,58,237,0.04);
+}
+
+tbody tr.clickable:hover td:first-child {
+  box-shadow: inset 3px 0 0 var(--purple);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+
+.mono-purple { color: #a78bfa; }
+.mono-dim    { color: var(--text-3); font-size: 0.75rem; }
+
+.truncate {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+td.right { text-align: right; }
+
+/* ─── Badges ───────────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.badge-GET    { background: rgba(16,185,129,0.12);  color: #10b981; border: 1px solid rgba(16,185,129,0.2); }
+.badge-POST   { background: rgba(59,130,246,0.12);  color: #60a5fa; border: 1px solid rgba(59,130,246,0.2); }
+.badge-PUT    { background: rgba(245,158,11,0.12);  color: #fbbf24; border: 1px solid rgba(245,158,11,0.2); }
+.badge-PATCH  { background: rgba(249,115,22,0.12);  color: #fb923c; border: 1px solid rgba(249,115,22,0.2); }
+.badge-DELETE { background: rgba(239,68,68,0.12);   color: #f87171; border: 1px solid rgba(239,68,68,0.2); }
+
+.badge-success { background: rgba(16,185,129,0.12);  color: #10b981; border: 1px solid rgba(16,185,129,0.2); }
+.badge-error   { background: rgba(239,68,68,0.12);   color: #f87171; border: 1px solid rgba(239,68,68,0.2); }
+.badge-valid   { background: rgba(16,185,129,0.12);  color: #10b981; border: 1px solid rgba(16,185,129,0.2); }
+.badge-invalid { background: rgba(239,68,68,0.12);   color: #f87171; border: 1px solid rgba(239,68,68,0.2); }
+.badge-approved { background: rgba(124,58,237,0.12); color: #a78bfa; border: 1px solid rgba(124,58,237,0.2); }
+.badge-pending  { background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.2); }
+
+/* number badge (requests count) */
+.num-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  padding: 2px 6px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ─── Toggle switch ────────────────────────────────────────────────────────── */
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.toggle input { opacity: 0; width: 0; height: 0; }
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-3);
+  border-radius: 20px;
+  cursor: pointer;
+  border: 1px solid var(--border-2);
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--text-3);
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.toggle input:checked + .toggle-slider {
+  background: rgba(124,58,237,0.25);
+  border-color: rgba(124,58,237,0.5);
+}
+
+.toggle input:checked + .toggle-slider::before {
+  background: var(--purple);
+  transform: translateY(-50%) translateX(16px);
+}
+
+/* ─── Confidence bar ───────────────────────────────────────────────────────── */
+.conf-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.conf-bar {
+  width: 60px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.conf-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.conf-fill.high   { background: var(--green); }
+.conf-fill.medium { background: var(--yellow); }
+.conf-fill.low    { background: var(--red); }
+
+.conf-pct {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-2);
+  min-width: 32px;
+}
+
+/* ─── Filter bar ───────────────────────────────────────────────────────────── */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  background: var(--surface-2);
+}
+
+.filter-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.filter-search-wrap svg {
+  position: absolute;
+  left: 9px;
+  width: 13px;
+  height: 13px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.filter-input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px 6px 28px;
+  color: var(--text-1);
+  font-size: 0.8rem;
+  font-family: 'Inter', sans-serif;
+  width: 200px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.filter-input::placeholder { color: var(--text-3); }
+.filter-input:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(124,58,237,0.1); }
+
+.filter-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+
+.pill-group {
+  display: flex;
+  gap: 4px;
+}
+
+.pill {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.73rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  transition: all 0.12s;
+  font-family: 'Inter', sans-serif;
+}
+
+.pill:hover { color: var(--text-2); border-color: var(--border-2); }
+
+.pill.active {
+  background: rgba(124,58,237,0.15);
+  border-color: rgba(124,58,237,0.4);
+  color: #c4b5fd;
+}
+
+/* ─── Tools split view ─────────────────────────────────────────────────────── */
+#tools-split {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+#tools-list { flex: 0 0 420px; min-width: 0; }
+
+#code-viewer {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  display: none;
+}
+
+#code-viewer.visible { display: block; }
+
+.code-viewer-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface-2);
+}
+
+.code-filename {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: #a78bfa;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.code-filename svg { width: 14px; height: 14px; color: var(--text-3); }
+
+.btn-copy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-2);
+  color: var(--text-2);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: 'Inter', sans-serif;
+}
+
+.btn-copy:hover { background: var(--border-2); color: var(--text-1); }
+.btn-copy svg { width: 12px; height: 12px; }
+
+#code-viewer pre[class*="language-"] {
+  margin: 0;
+  padding: 20px;
+  background: var(--surface) !important;
+  font-size: 0.78rem;
+  max-height: calc(100vh - 260px);
+  overflow: auto;
+  border-radius: 0;
+}
+
+.code-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  gap: 12px;
+  color: var(--text-3);
+}
+
+.code-placeholder svg { width: 40px; height: 40px; opacity: 0.3; }
+.code-placeholder p { font-size: 0.875rem; }
+
+/* ─── Projects grid ────────────────────────────────────────────────────────── */
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.project-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.project-card:hover {
+  border-color: var(--border-2);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+.project-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.project-name {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: -0.01em;
+}
+
+.project-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.project-desc {
+  font-size: 0.8125rem;
+  color: var(--text-3);
+  margin-bottom: 16px;
+  min-height: 18px;
+}
+
+.btn-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  color: var(--text-2);
+  transition: all 0.15s;
+  font-family: 'Inter', sans-serif;
+  text-decoration: none;
+}
+
+.btn-sm:hover { background: var(--surface-3); color: var(--text-1); border-color: rgba(124,58,237,0.4); }
+.btn-sm svg { width: 12px; height: 12px; }
+
+/* ─── Empty state ──────────────────────────────────────────────────────────── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  gap: 12px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.empty-state svg { width: 48px; height: 48px; opacity: 0.25; }
+.empty-state h3  { font-size: 0.9375rem; font-weight: 600; color: var(--text-2); }
+.empty-state p   { font-size: 0.8125rem; max-width: 320px; }
+
+.empty-cmd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+  color: #a78bfa;
+  margin-top: 4px;
+}
+
+/* ─── Skeleton loader ──────────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+/* ─── Toast system ─────────────────────────────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  min-width: 240px;
+  max-width: 340px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  animation: slideIn 0.2s ease forwards;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+@keyframes slideOut {
+  from { transform: translateX(0);    opacity: 1; }
+  to   { transform: translateX(120%); opacity: 0; }
+}
+
+.toast.success { background: rgba(16,185,129,0.12);  border-color: rgba(16,185,129,0.25); color: #34d399; }
+.toast.error   { background: rgba(239,68,68,0.12);   border-color: rgba(239,68,68,0.25);  color: #f87171; }
+.toast.info    { background: rgba(59,130,246,0.12);  border-color: rgba(59,130,246,0.25); color: #60a5fa; }
+
+.toast svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+/* ─── Execution stats row ──────────────────────────────────────────────────── */
+.exec-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.exec-stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.exec-stat-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+.exec-stat-val {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: -0.02em;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ─── Highlight search ─────────────────────────────────────────────────────── */
+mark.hl {
+  background: rgba(124,58,237,0.3);
+  color: #c4b5fd;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* ─── Prism override ───────────────────────────────────────────────────────── */
+code[class*="language-"], pre[class*="language-"] {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.78rem !important;
+  tab-size: 4;
+}
+
+pre[class*="language-"] { background: var(--surface) !important; }
 </style>
 </head>
 <body>
 
-<div id="sidebar">
-  <h1>Auto<span>MCP</span> 2.0</h1>
-  <nav>
-    <a class="active" onclick="showPanel('sessions')">Sessions</a>
-    <a onclick="showPanel('specs')">Specs</a>
-    <a onclick="showPanel('tools')">Tools</a>
-    <a onclick="showPanel('executions')">Executions</a>
-    <a onclick="showPanel('projects')">Projects</a>
+<!-- ── Sidebar ──────────────────────────────────────────────────────────────── -->
+<aside id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+      </svg>
+    </div>
+    <span class="logo-text">AutoMCP</span>
+    <span class="logo-version">2.0</span>
+  </div>
+
+  <nav class="sidebar-nav">
+    <span class="nav-section-label">Navigation</span>
+    <a class="nav-item active" onclick="showPanel('overview')" data-panel="overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+      Overview
+    </a>
+    <a class="nav-item" onclick="showPanel('sessions')" data-panel="sessions">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M8 10l2 2-2 2M12 14h4"/>
+      </svg>
+      Sessions
+    </a>
+    <a class="nav-item" onclick="showPanel('specs')" data-panel="specs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2l9 4.5v11L12 22 3 17.5v-11L12 2z"/><path d="M12 22V12M3 6.5l9 5.5 9-5.5"/>
+      </svg>
+      Specs
+    </a>
+    <a class="nav-item" onclick="showPanel('tools')" data-panel="tools">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+      </svg>
+      Tools
+    </a>
+    <a class="nav-item" onclick="showPanel('executions')" data-panel="executions">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+      Executions
+    </a>
+    <a class="nav-item" onclick="showPanel('projects')" data-panel="projects">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+      Projects
+    </a>
   </nav>
+
+  <div class="sidebar-footer">
+    <a class="nav-item-ext" href="https://github.com/pmacom/AutoMCP" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+        <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+      </svg>
+      Docs
+    </a>
+  </div>
+</aside>
+
+<!-- ── App Shell ─────────────────────────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- Top bar -->
+  <header id="topbar">
+    <div class="breadcrumb">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+      <span class="breadcrumb-sep">/</span>
+      <span class="breadcrumb-current" id="breadcrumb-label">Overview</span>
+    </div>
+    <div class="topbar-actions">
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="text" id="global-search" placeholder="Search current panel…" autocomplete="off">
+      </div>
+      <button class="btn-icon" id="refresh-btn" title="Refresh data" onclick="loadAllData(true)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/>
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main scroll area -->
+  <main id="main">
+
+    <!-- ── Overview panel ────────────────────────────────────────────────────── -->
+    <div id="panel-overview" class="panel active">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Overview</div>
+          <div class="section-sub">Real-time metrics across your AutoMCP workspace</div>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card accent-purple">
+          <div class="stat-icon purple">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M8 10l2 2-2 2M12 14h4"/>
+            </svg>
+          </div>
+          <div class="stat-label">Sessions</div>
+          <div class="stat-value" id="stat-sessions">{{ total_sessions }}</div>
+          <div class="stat-trend neutral" id="trend-sessions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Recording sessions
+          </div>
+        </div>
+        <div class="stat-card accent-cyan">
+          <div class="stat-icon cyan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2l9 4.5v11L12 22 3 17.5v-11L12 2z"/>
+            </svg>
+          </div>
+          <div class="stat-label">Total Specs</div>
+          <div class="stat-value" id="stat-specs">{{ total_specs }}</div>
+          <div class="stat-trend neutral" id="trend-specs">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Tool specifications
+          </div>
+        </div>
+        <div class="stat-card accent-green">
+          <div class="stat-icon green">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <div class="stat-label">Approved</div>
+          <div class="stat-value" id="stat-approved">{{ approved_specs }}</div>
+          <div class="stat-trend neutral" id="trend-approved">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Approved specs
+          </div>
+        </div>
+        <div class="stat-card accent-indigo">
+          <div class="stat-icon indigo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+            </svg>
+          </div>
+          <div class="stat-label">Valid Tools</div>
+          <div class="stat-value" id="stat-tools">{{ valid_tools }}</div>
+          <div class="stat-trend neutral" id="trend-tools">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Generated tools
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Recent Sessions</span>
+            <span class="card-count" id="ov-session-count">—</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Session ID</th><th>URL</th><th class="right">Requests</th>
+              </tr></thead>
+              <tbody id="ov-sessions-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Recent Executions</span>
+            <span class="card-count" id="ov-exec-count">—</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Tool</th><th>Status</th><th class="right">Duration</th>
+              </tr></thead>
+              <tbody id="ov-exec-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Sessions panel ────────────────────────────────────────────────────── -->
+    <div id="panel-sessions" class="panel">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Recording Sessions</div>
+          <div class="section-sub">HTTP traffic captured for spec generation</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">All Sessions</span>
+          <span class="card-count" id="sessions-count">—</span>
+        </div>
+        <div class="table-wrap">
+          <table id="sessions-table">
+            <thead><tr>
+              <th>Session ID</th><th>URL</th><th>Recorded At</th><th class="right">Requests</th>
+            </tr></thead>
+            <tbody id="sessions-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Specs panel ───────────────────────────────────────────────────────── -->
+    <div id="panel-specs" class="panel">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Tool Specs</div>
+          <div class="section-sub">API endpoint specifications extracted from sessions</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="filter-bar">
+          <div class="filter-search-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input type="text" class="filter-input" id="specs-search" placeholder="Filter by tool name…" autocomplete="off">
+          </div>
+          <div class="filter-divider"></div>
+          <div class="pill-group" id="method-pills">
+            <button class="pill active" data-method="ALL">ALL</button>
+            <button class="pill" data-method="GET">GET</button>
+            <button class="pill" data-method="POST">POST</button>
+            <button class="pill" data-method="PUT">PUT</button>
+            <button class="pill" data-method="DELETE">DELETE</button>
+          </div>
+          <div class="filter-divider"></div>
+          <div class="pill-group" id="status-pills">
+            <button class="pill active" data-status="ALL">ALL</button>
+            <button class="pill" data-status="approved">Approved</button>
+            <button class="pill" data-status="pending">Pending</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Tool Name</th><th>Method</th><th>URL</th>
+              <th>Confidence</th><th>Quality</th>
+              <th style="text-align:center">Approved</th>
+              <th style="text-align:center">Read-only</th>
+            </tr></thead>
+            <tbody id="specs-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tools panel ───────────────────────────────────────────────────────── -->
+    <div id="panel-tools" class="panel">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Generated Tools</div>
+          <div class="section-sub">Click a row to inspect the source code</div>
+        </div>
+      </div>
+
+      <div id="tools-split">
+        <div class="card" id="tools-list">
+          <div class="card-header">
+            <span class="card-title">Tools</span>
+            <span class="card-count" id="tools-count">—</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Tool Name</th><th>Method</th><th>Valid</th><th>Generated At</th>
+              </tr></thead>
+              <tbody id="tools-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="code-viewer">
+          <div class="code-viewer-header">
+            <div class="code-filename">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+              </svg>
+              <span id="code-filename-label">—</span>
+            </div>
+            <button class="btn-copy" onclick="copySource()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+              Copy
+            </button>
+          </div>
+          <pre id="code-pre"><code id="code-content" class="language-python"></code></pre>
+        </div>
+
+        <div id="code-placeholder-outer" class="card" style="flex:1;display:flex;align-items:center;justify-content:center;">
+          <div class="code-placeholder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+            </svg>
+            <h3 style="color:var(--text-3);font-size:0.875rem;font-weight:600">Select a tool</h3>
+            <p style="font-size:0.8rem;color:var(--text-3)">Click any row to view source code</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Executions panel ──────────────────────────────────────────────────── -->
+    <div id="panel-executions" class="panel">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Execution Log</div>
+          <div class="section-sub">Tool invocation history and results</div>
+        </div>
+      </div>
+
+      <div class="exec-stats">
+        <div class="exec-stat">
+          <div class="exec-stat-label">Total Runs</div>
+          <div class="exec-stat-val" id="ex-total">—</div>
+        </div>
+        <div class="exec-stat">
+          <div class="exec-stat-label">Success Rate</div>
+          <div class="exec-stat-val" id="ex-rate">—</div>
+        </div>
+        <div class="exec-stat">
+          <div class="exec-stat-label">Avg Duration</div>
+          <div class="exec-stat-val" id="ex-avg">—</div>
+        </div>
+        <div class="exec-stat">
+          <div class="exec-stat-label">Last Run</div>
+          <div class="exec-stat-val" id="ex-last" style="font-size:0.85rem;">—</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Executions</span>
+          <span class="card-count" id="exec-count">—</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>ID</th><th>Tool</th><th>Status</th>
+              <th class="right">Duration</th><th>Inputs</th><th>Executed At</th>
+            </tr></thead>
+            <tbody id="exec-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Projects panel ────────────────────────────────────────────────────── -->
+    <div id="panel-projects" class="panel">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Projects</div>
+          <div class="section-sub">Workspace projects grouping sessions and tools</div>
+        </div>
+      </div>
+      <div id="projects-container"></div>
+    </div>
+
+  </main>
 </div>
 
-<div id="main">
-  <div class="stats">
-    <div class="stat-card"><div class="label">Sessions</div><div class="value" id="stat-sessions">{{ total_sessions }}</div></div>
-    <div class="stat-card"><div class="label">Specs</div><div class="value" id="stat-specs">{{ total_specs }}</div></div>
-    <div class="stat-card"><div class="label">Approved</div><div class="value" id="stat-approved">{{ approved_specs }}</div></div>
-    <div class="stat-card"><div class="label">Tools</div><div class="value" id="stat-tools">{{ valid_tools }}</div></div>
-  </div>
+<!-- Toast container -->
+<div class="toast-container" id="toast-container"></div>
 
-  <div id="panel-sessions" class="panel active">
-    <h2>Recording Sessions</h2>
-    <table id="sessions-table">
-      <thead><tr><th>Session ID</th><th>URL</th><th>Recorded At</th><th>Requests</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="panel-specs" class="panel">
-    <h2>Tool Specs</h2>
-    <table id="specs-table">
-      <thead><tr><th>Tool Name</th><th>Method</th><th>URL</th><th>Confidence</th><th>Approved</th><th>Read-only</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="panel-tools" class="panel">
-    <h2>Generated Tools <span style="font-size:0.8rem;color:#64748b">(click row to view source)</span></h2>
-    <table id="tools-table">
-      <thead><tr><th>Tool Name</th><th>File</th><th>Valid</th><th>Generated At</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="panel-executions" class="panel">
-    <h2>Execution Log</h2>
-    <table id="executions-table">
-      <thead><tr><th>ID</th><th>Tool</th><th>Status</th><th>Duration</th><th>Executed At</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="panel-projects" class="panel">
-    <h2>Projects</h2>
-    <table id="projects-table">
-      <thead><tr><th>Name</th><th>Description</th><th>ID</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</div>
-
-<div id="source-modal">
-  <div id="source-box">
-    <header>
-      <span id="source-title" style="font-size:0.9rem;color:#a78bfa;font-family:monospace"></span>
-      <button id="close-modal" onclick="closeModal()">&#x2715;</button>
-    </header>
-    <pre id="source-code"></pre>
-  </div>
-</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
 
 <script>
-const panels = ['sessions','specs','tools','executions','projects'];
+/* ─────────────────────────────────────────────────────────────────────────────
+   STATE
+───────────────────────────────────────────────────────────────────────────── */
+const state = {
+  currentPanel: 'overview',
+  sessions:     [],
+  specs:        [],
+  tools:        [],
+  executions:   [],
+  projects:     [],
+  search:       '',
+  methodFilter: 'ALL',
+  statusFilter: 'ALL',
+  activeToolName: null,
+  activeSourceCode: '',
+  sessionFilter: null,   // set when navigating sessions → specs
+};
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   INIT
+───────────────────────────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  loadAllData();
+  setupSearch();
+  setupFilterPills();
+  showPanel('overview');
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   DATA LOADING
+───────────────────────────────────────────────────────────────────────────── */
+async function loadAllData(isRefresh = false) {
+  if (isRefresh) {
+    const btn = document.getElementById('refresh-btn');
+    btn.style.opacity = '0.5';
+    btn.style.pointerEvents = 'none';
+  }
+
+  try {
+    const [sessions, specs, tools, executions, projects] = await Promise.allSettled([
+      fetch('/api/sessions').then(r => r.json()),
+      fetch('/api/specs').then(r => r.json()),
+      fetch('/api/tools').then(r => r.json()),
+      fetch('/api/executions').then(r => r.json()),
+      fetch('/api/projects').then(r => r.json()),
+    ]);
+
+    if (sessions.status    === 'fulfilled') state.sessions    = sessions.value    || [];
+    if (specs.status       === 'fulfilled') state.specs       = specs.value       || [];
+    if (tools.status       === 'fulfilled') state.tools       = tools.value       || [];
+    if (executions.status  === 'fulfilled') state.executions  = executions.value  || [];
+    if (projects.status    === 'fulfilled') state.projects    = projects.value    || [];
+
+    updateStatCards();
+    renderCurrentPanel();
+
+    if (isRefresh) showToast('Data refreshed', 'success');
+  } catch (err) {
+    if (isRefresh) showToast('Refresh failed: ' + err.message, 'error');
+  } finally {
+    if (isRefresh) {
+      const btn = document.getElementById('refresh-btn');
+      btn.style.opacity = '';
+      btn.style.pointerEvents = '';
+    }
+  }
+}
+
+function updateStatCards() {
+  const totalSessions = state.sessions.length;
+  const totalSpecs    = state.specs.length;
+  const approved      = state.specs.filter(s => s.approved).length;
+  const validTools    = state.tools.filter(t => t.validation_status === 'valid').length;
+
+  document.getElementById('stat-sessions').textContent = totalSessions;
+  document.getElementById('stat-specs').textContent    = totalSpecs;
+  document.getElementById('stat-approved').textContent = approved;
+  document.getElementById('stat-tools').textContent    = validTools;
+
+  // Trend badges
+  const approvalRate = totalSpecs > 0 ? Math.round((approved / totalSpecs) * 100) : 0;
+  setTrend('trend-approved', approvalRate, '%', 'approval rate');
+
+  const validRate = state.tools.length > 0 ? Math.round((validTools / state.tools.length) * 100) : 0;
+  setTrend('trend-tools', validRate, '%', 'valid rate');
+
+  const execCount = state.executions.length;
+  const successCount = state.executions.filter(e => e.success).length;
+  const successRate = execCount > 0 ? Math.round((successCount / execCount) * 100) : 0;
+  setTrend('trend-specs', successRate, '%', 'exec success', true);
+  setTrend('trend-sessions', state.sessions.length, '', 'total', false, true);
+}
+
+function setTrend(id, val, suffix, label, showRate, neutral) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const upSvg    = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>';
+  const downSvg  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+  const dashSvg  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+
+  if (neutral) {
+    el.className = 'stat-trend neutral';
+    el.innerHTML = dashSvg + `<span>${val}${suffix} ${label}</span>`;
+    return;
+  }
+  if (val >= 75) {
+    el.className = 'stat-trend up';
+    el.innerHTML = upSvg + `<span>${val}${suffix} ${label}</span>`;
+  } else if (val >= 40) {
+    el.className = 'stat-trend neutral';
+    el.innerHTML = dashSvg + `<span>${val}${suffix} ${label}</span>`;
+  } else {
+    el.className = 'stat-trend down';
+    el.innerHTML = downSvg + `<span>${val}${suffix} ${label}</span>`;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PANEL NAVIGATION
+───────────────────────────────────────────────────────────────────────────── */
+const panelNames = {
+  overview:   'Overview',
+  sessions:   'Sessions',
+  specs:      'Specs',
+  tools:      'Tools',
+  executions: 'Executions',
+  projects:   'Projects',
+};
 
 function showPanel(name) {
-  panels.forEach(function(p) {
-    document.getElementById('panel-' + p).classList.remove('active');
-  });
-  document.getElementById('panel-' + name).classList.add('active');
-  document.querySelectorAll('nav a').forEach(function(a, i) {
-    a.classList.toggle('active', panels[i] === name);
-  });
-  loadPanel(name);
+  // Deactivate all
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(a => a.classList.remove('active'));
+
+  // Activate target
+  const panelEl = document.getElementById('panel-' + name);
+  if (panelEl) panelEl.classList.add('active');
+
+  const navEl = document.querySelector(`.nav-item[data-panel="${name}"]`);
+  if (navEl) navEl.classList.add('active');
+
+  state.currentPanel = name;
+
+  // Update breadcrumb
+  const bcLabel = document.getElementById('breadcrumb-label');
+  if (bcLabel) bcLabel.textContent = panelNames[name] || name;
+
+  // Clear search
+  const gs = document.getElementById('global-search');
+  if (gs) { gs.value = ''; state.search = ''; }
+
+  renderCurrentPanel();
 }
 
-function methodBadge(method) {
-  var cls = 'method-' + (method || '').toLowerCase();
-  return '<span class="' + cls + '">' + method + '</span>';
+function renderCurrentPanel() {
+  switch (state.currentPanel) {
+    case 'overview':   renderOverview();   break;
+    case 'sessions':   renderSessions();   break;
+    case 'specs':      renderSpecs();      break;
+    case 'tools':      renderTools();      break;
+    case 'executions': renderExecutions(); break;
+    case 'projects':   renderProjects();   break;
+  }
 }
 
-function loadPanel(name) {
-  if (name === 'sessions') loadSessions();
-  else if (name === 'specs') loadSpecs();
-  else if (name === 'tools') loadTools();
-  else if (name === 'executions') loadExecutions();
-  else if (name === 'projects') loadProjects();
+/* ─────────────────────────────────────────────────────────────────────────────
+   RENDER: OVERVIEW
+───────────────────────────────────────────────────────────────────────────── */
+function renderOverview() {
+  // Recent sessions
+  const recent5Sessions = state.sessions.slice(0, 5);
+  const sTbody = document.getElementById('ov-sessions-tbody');
+  document.getElementById('ov-session-count').textContent = state.sessions.length;
+
+  if (!recent5Sessions.length) {
+    sTbody.innerHTML = emptyRow(3, 'No sessions recorded yet');
+  } else {
+    sTbody.innerHTML = recent5Sessions.map(s => {
+      const url = s.url || '';
+      const recAt = fmtDate(s.started_at);
+      return `<tr class="clickable" onclick="showPanel('sessions')">
+        <td><span class="mono mono-purple">${esc(s.short_id)}</span></td>
+        <td><span class="truncate" title="${esc(url)}">${esc(url)}</span></td>
+        <td class="right"><span class="num-badge">${s.request_count ?? 0}</span></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Recent executions
+  const recent5Exec = state.executions.slice(0, 5);
+  const eTbody = document.getElementById('ov-exec-tbody');
+  document.getElementById('ov-exec-count').textContent = state.executions.length;
+
+  if (!recent5Exec.length) {
+    eTbody.innerHTML = emptyRow(3, 'No executions yet');
+  } else {
+    eTbody.innerHTML = recent5Exec.map(e => {
+      const statusBadge = e.success
+        ? '<span class="badge badge-success">OK</span>'
+        : '<span class="badge badge-error">ERR</span>';
+      const dur = e.duration_ms != null ? (+e.duration_ms).toFixed(0) + 'ms' : '—';
+      return `<tr>
+        <td><span class="mono mono-purple">${esc(e.tool_name)}</span></td>
+        <td>${statusBadge}</td>
+        <td class="right"><span class="mono-dim">${dur}</span></td>
+      </tr>`;
+    }).join('');
+  }
 }
 
-async function loadSessions() {
-  var data = await fetch('/api/sessions').then(function(r) { return r.json(); });
-  var tbody = document.querySelector('#sessions-table tbody');
-  tbody.innerHTML = data.map(function(s) {
-    return '<tr>' +
-      '<td><code style="color:#a78bfa">' + s.short_id + '</code></td>' +
-      '<td class="truncate">' + s.url + '</td>' +
-      '<td>' + s.started_at + '</td>' +
-      '<td>' + s.request_count + '</td>' +
-      '</tr>';
+/* ─────────────────────────────────────────────────────────────────────────────
+   RENDER: SESSIONS
+───────────────────────────────────────────────────────────────────────────── */
+function renderSessions() {
+  const tbody = document.getElementById('sessions-tbody');
+  const q = state.search.toLowerCase();
+  let data = state.sessions;
+
+  if (q) {
+    data = data.filter(s =>
+      (s.short_id || '').toLowerCase().includes(q) ||
+      (s.url || '').toLowerCase().includes(q)
+    );
+  }
+
+  document.getElementById('sessions-count').textContent = data.length;
+
+  if (!data.length) {
+    tbody.innerHTML = emptyRow(4, state.search ? 'No sessions match your search' : 'No sessions recorded yet');
+    return;
+  }
+
+  tbody.innerHTML = data.map(s => {
+    const url   = s.url || '';
+    const recAt = fmtDate(s.started_at);
+    const idHl  = hl(esc(s.short_id), q);
+    const urlHl = hl(esc(url), q);
+    return `<tr class="clickable" onclick="goToSpecsForSession('${esc(s.session_id || s.short_id)}')">
+      <td><span class="mono mono-purple">${idHl}</span></td>
+      <td><span class="truncate" title="${esc(url)}">${urlHl}</span></td>
+      <td><span class="mono-dim">${recAt}</span></td>
+      <td class="right"><span class="num-badge">${s.request_count ?? 0}</span></td>
+    </tr>`;
   }).join('');
 }
 
-async function loadSpecs() {
-  var data = await fetch('/api/specs').then(function(r) { return r.json(); });
-  var tbody = document.querySelector('#specs-table tbody');
-  tbody.innerHTML = data.map(function(s) {
-    return '<tr>' +
-      '<td><code style="color:#a78bfa">' + s.tool_name + '</code></td>' +
-      '<td>' + methodBadge(s.method) + '</td>' +
-      '<td class="truncate" title="' + s.url_template + '">' + s.url_template + '</td>' +
-      '<td>' + (s.confidence * 100).toFixed(0) + '%</td>' +
-      '<td><input type="checkbox" ' + (s.approved ? 'checked' : '') + ' onchange="toggleSpec(\'' + s.spec_id + '\', \'approved\', this.checked)"></td>' +
-      '<td><input type="checkbox" ' + (s.is_readonly ? 'checked' : '') + ' onchange="toggleSpec(\'' + s.spec_id + '\', \'is_readonly\', this.checked)"></td>' +
-      '</tr>';
+function goToSpecsForSession(sessionId) {
+  state.sessionFilter = sessionId;
+  showPanel('specs');
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   RENDER: SPECS
+───────────────────────────────────────────────────────────────────────────── */
+function renderSpecs() {
+  const tbody = document.getElementById('specs-tbody');
+  const filtered = filterSpecs(state.specs);
+
+  if (!filtered.length) {
+    tbody.innerHTML = emptyRow(7, state.search || state.methodFilter !== 'ALL' || state.statusFilter !== 'ALL'
+      ? 'No specs match your filters'
+      : 'No specs generated yet');
+    return;
+  }
+
+  const q = state.search.toLowerCase();
+  tbody.innerHTML = filtered.map(s => {
+    const method  = (s.method || 'GET').toUpperCase();
+    const url     = s.url_template || '';
+    const conf    = parseFloat(s.confidence) || 0;
+    const confPct = Math.round(conf * 100);
+    const confCls = conf >= 0.8 ? 'high' : conf >= 0.6 ? 'medium' : 'low';
+    const quality = parseFloat(s.quality_score) || 0;
+    const qualStr = quality.toFixed(1);
+    const qualColor = quality >= 0.8 ? 'var(--green)' : quality >= 0.6 ? 'var(--yellow)' : 'var(--red)';
+    const nameHl  = hl(esc(s.tool_name), q);
+    const urlHl   = hl(esc(url), q);
+
+    return `<tr>
+      <td><span class="mono mono-purple">${nameHl}</span></td>
+      <td><span class="badge badge-${method}">${method}</span></td>
+      <td><span class="truncate" title="${esc(url)}">${urlHl}</span></td>
+      <td>
+        <div class="conf-cell">
+          <div class="conf-bar"><div class="conf-fill ${confCls}" style="width:${confPct}%"></div></div>
+          <span class="conf-pct">${confPct}%</span>
+        </div>
+      </td>
+      <td><span style="font-weight:600;color:${qualColor};font-family:'JetBrains Mono',monospace;font-size:0.8rem">${qualStr}</span></td>
+      <td style="text-align:center">
+        <label class="toggle">
+          <input type="checkbox" ${s.approved ? 'checked' : ''}
+            onchange="toggleSpec('${esc(s.spec_id)}', 'approved', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+      </td>
+      <td style="text-align:center">
+        <label class="toggle">
+          <input type="checkbox" ${s.is_readonly ? 'checked' : ''}
+            onchange="toggleSpec('${esc(s.spec_id)}', 'is_readonly', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+      </td>
+    </tr>`;
   }).join('');
+}
+
+function filterSpecs(specs) {
+  const q = state.search.toLowerCase();
+  let out = specs;
+
+  // Session filter (from sessions panel click)
+  if (state.sessionFilter) {
+    out = out.filter(s => (s.session_id || '') === state.sessionFilter);
+    // Auto-clear after first render
+    state.sessionFilter = null;
+  }
+
+  if (q) {
+    out = out.filter(s =>
+      (s.tool_name || '').toLowerCase().includes(q) ||
+      (s.url_template || '').toLowerCase().includes(q)
+    );
+  }
+
+  if (state.methodFilter !== 'ALL') {
+    out = out.filter(s => (s.method || '').toUpperCase() === state.methodFilter);
+  }
+
+  if (state.statusFilter === 'approved') {
+    out = out.filter(s => s.approved);
+  } else if (state.statusFilter === 'pending') {
+    out = out.filter(s => !s.approved);
+  }
+
+  return out;
 }
 
 async function toggleSpec(specId, field, value) {
-  var body = {};
+  const body = {};
   body[field] = value;
-  await fetch('/api/specs/' + specId, {
-    method: 'PATCH',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)
+  try {
+    const resp = await fetch('/api/specs/' + specId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error('Server returned ' + resp.status);
+
+    // Update local state
+    const spec = state.specs.find(s => s.spec_id === specId);
+    if (spec) spec[field] = value;
+
+    const label = field === 'approved' ? (value ? 'Spec approved' : 'Spec unapproved') : (value ? 'Marked read-only' : 'Marked writable');
+    showToast(label, 'success');
+    updateStatCards();
+  } catch (err) {
+    showToast('Update failed: ' + err.message, 'error');
+    // Revert checkbox
+    renderSpecs();
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   RENDER: TOOLS
+───────────────────────────────────────────────────────────────────────────── */
+function renderTools() {
+  const tbody  = document.getElementById('tools-tbody');
+  const q      = state.search.toLowerCase();
+  let data     = state.tools;
+
+  if (q) {
+    data = data.filter(t =>
+      (t.tool_name || '').toLowerCase().includes(q) ||
+      (t.file_path || '').toLowerCase().includes(q)
+    );
+  }
+
+  document.getElementById('tools-count').textContent = data.length;
+
+  if (!data.length) {
+    tbody.innerHTML = emptyRow(4, q ? 'No tools match your search' : 'No tools generated yet');
+    return;
+  }
+
+  tbody.innerHTML = data.map(t => {
+    const method   = (t.method || '').toUpperCase();
+    const methodBadge = method ? `<span class="badge badge-${method}">${method}</span>` : '<span class="mono-dim">—</span>';
+    const valid    = t.validation_status === 'valid';
+    const validBadge = valid
+      ? '<span class="badge badge-valid">✓ valid</span>'
+      : '<span class="badge badge-invalid">✗ invalid</span>';
+    const genAt    = fmtDate(t.generated_at);
+    const nameHl   = hl(esc(t.tool_name), q);
+    const active   = state.activeToolName === t.tool_name ? 'background:var(--surface-3);' : '';
+
+    return `<tr class="clickable" style="${active}" onclick="loadSource('${esc(t.tool_name)}')">
+      <td><span class="mono mono-purple">${nameHl}</span></td>
+      <td>${methodBadge}</td>
+      <td>${validBadge}</td>
+      <td><span class="mono-dim">${genAt}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadSource(toolName) {
+  state.activeToolName = toolName;
+
+  // Show viewer, hide placeholder
+  document.getElementById('code-viewer').classList.add('visible');
+  document.getElementById('code-placeholder-outer').style.display = 'none';
+
+  document.getElementById('code-filename-label').textContent = toolName + '.py';
+  document.getElementById('code-content').textContent = 'Loading…';
+
+  // Re-render table to show active highlight
+  renderTools();
+
+  try {
+    const data = await fetch('/api/tools/' + encodeURIComponent(toolName) + '/source')
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+
+    const src = data.source || '# Source not available';
+    state.activeSourceCode = src;
+
+    const codeEl = document.getElementById('code-content');
+    codeEl.textContent = src;
+    Prism.highlightElement(codeEl);
+  } catch (err) {
+    document.getElementById('code-content').textContent = '# Error loading source: ' + err.message;
+    state.activeSourceCode = '';
+  }
+}
+
+function copySource() {
+  if (!state.activeSourceCode) {
+    showToast('No source loaded', 'info');
+    return;
+  }
+  navigator.clipboard.writeText(state.activeSourceCode)
+    .then(() => showToast('Copied to clipboard', 'success'))
+    .catch(() => showToast('Copy failed', 'error'));
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   RENDER: EXECUTIONS
+───────────────────────────────────────────────────────────────────────────── */
+function renderExecutions() {
+  const tbody = document.getElementById('exec-tbody');
+  const q     = state.search.toLowerCase();
+  let data    = state.executions;
+
+  if (q) {
+    data = data.filter(e =>
+      (e.tool_name || '').toLowerCase().includes(q) ||
+      (e.id || '').toLowerCase().includes(q)
+    );
+  }
+
+  document.getElementById('exec-count').textContent = data.length;
+
+  // Compute exec stats from full dataset
+  const total   = state.executions.length;
+  const success = state.executions.filter(e => e.success).length;
+  const rate    = total > 0 ? ((success / total) * 100).toFixed(1) + '%' : '—';
+  const durations = state.executions.map(e => parseFloat(e.duration_ms)).filter(d => !isNaN(d));
+  const avg = durations.length > 0 ? (durations.reduce((a, b) => a + b, 0) / durations.length).toFixed(0) + 'ms' : '—';
+  const lastRun = state.executions.length > 0 ? fmtDate(state.executions[0].executed_at) : '—';
+
+  document.getElementById('ex-total').textContent = total;
+  document.getElementById('ex-rate').textContent  = rate;
+  document.getElementById('ex-avg').textContent   = avg;
+  document.getElementById('ex-last').textContent  = lastRun;
+
+  if (!data.length) {
+    tbody.innerHTML = emptyRow(6, q ? 'No executions match your search' : 'No executions recorded yet');
+    return;
+  }
+
+  tbody.innerHTML = data.map(e => {
+    const statusBadge = e.success
+      ? '<span class="badge badge-success">OK</span>'
+      : '<span class="badge badge-error">ERR</span>';
+    const dur     = e.duration_ms != null ? (+e.duration_ms).toFixed(0) + 'ms' : '—';
+    const execAt  = fmtDate(e.executed_at);
+    const inputs  = e.inputs ? JSON.stringify(e.inputs).slice(0, 50) : '—';
+    const nameHl  = hl(esc(e.tool_name), q);
+    const idStr   = (e.id || '').slice(0, 8);
+
+    return `<tr>
+      <td><span class="mono mono-dim">${esc(idStr)}</span></td>
+      <td><span class="mono mono-purple">${nameHl}</span></td>
+      <td>${statusBadge}</td>
+      <td class="right"><span class="mono-dim">${dur}</span></td>
+      <td><span class="truncate" style="max-width:180px;color:var(--text-3);font-size:0.75rem">${esc(inputs)}</span></td>
+      <td><span class="mono-dim">${execAt}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   RENDER: PROJECTS
+───────────────────────────────────────────────────────────────────────────── */
+function renderProjects() {
+  const container = document.getElementById('projects-container');
+  const q = state.search.toLowerCase();
+  let data = state.projects;
+
+  if (q) {
+    data = data.filter(p =>
+      (p.name || '').toLowerCase().includes(q) ||
+      (p.description || '').toLowerCase().includes(q)
+    );
+  }
+
+  if (!data.length) {
+    container.innerHTML = `
+      <div class="card">
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+          <h3>No projects yet</h3>
+          <p>Create your first project to start organizing sessions and tools.</p>
+          <div class="empty-cmd">automcp project-create &lt;name&gt;</div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = `<div class="projects-grid">` + data.map(p => {
+    const shortId = (p.id || '').slice(0, 8);
+    const desc    = p.description || 'No description';
+    const nameHl  = hl(esc(p.name || ''), q);
+    return `<div class="project-card">
+      <div class="project-card-header">
+        <div class="project-name">${nameHl}</div>
+        <span class="project-id">${esc(shortId)}</span>
+      </div>
+      <div class="project-desc">${esc(desc)}</div>
+      <button class="btn-sm" onclick="filterSessionsByProject('${esc(p.id)}')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M8 10l2 2-2 2M12 14h4"/>
+        </svg>
+        View Sessions
+      </button>
+    </div>`;
+  }).join('') + `</div>`;
+}
+
+function filterSessionsByProject(projectId) {
+  state.sessionFilter = projectId;
+  showPanel('sessions');
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   SEARCH & FILTERS
+───────────────────────────────────────────────────────────────────────────── */
+function setupSearch() {
+  const input = document.getElementById('global-search');
+  input.addEventListener('input', () => {
+    state.search = input.value;
+    renderCurrentPanel();
   });
 }
 
-async function loadTools() {
-  var data = await fetch('/api/tools').then(function(r) { return r.json(); });
-  var tbody = document.querySelector('#tools-table tbody');
-  tbody.innerHTML = data.map(function(t) {
-    var filename = t.file_path.split('/').pop().split('\\').pop();
-    var validBadge = t.validation_status === 'valid'
-      ? '<span class="badge badge-green">&#x2713; valid</span>'
-      : '<span class="badge badge-red">&#x2717; invalid</span>';
-    var genAt = t.generated_at ? t.generated_at.slice(0,19).replace('T',' ') : '&mdash;';
-    return '<tr style="cursor:pointer" onclick="showSource(\'' + t.tool_name + '\')">' +
-      '<td><code style="color:#a78bfa">' + t.tool_name + '</code></td>' +
-      '<td style="color:#64748b;font-size:0.8rem">' + filename + '</td>' +
-      '<td>' + validBadge + '</td>' +
-      '<td style="color:#64748b;font-size:0.8rem">' + genAt + '</td>' +
-      '</tr>';
-  }).join('');
-}
+function setupFilterPills() {
+  // Method pills
+  document.getElementById('method-pills').addEventListener('click', e => {
+    const pill = e.target.closest('.pill');
+    if (!pill) return;
+    document.querySelectorAll('#method-pills .pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    state.methodFilter = pill.dataset.method;
+    renderSpecs();
+  });
 
-async function showSource(toolName) {
-  document.getElementById('source-title').textContent = toolName + '.py';
-  document.getElementById('source-code').textContent = 'Loading...';
-  document.getElementById('source-modal').classList.add('open');
-  var data = await fetch('/api/tools/' + toolName + '/source')
-    .then(function(r) { return r.json(); })
-    .catch(function() { return {source: 'Error loading source'}; });
-  document.getElementById('source-code').textContent = data.source || 'Not found';
-}
+  // Status pills
+  document.getElementById('status-pills').addEventListener('click', e => {
+    const pill = e.target.closest('.pill');
+    if (!pill) return;
+    document.querySelectorAll('#status-pills .pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    state.statusFilter = pill.dataset.status;
+    renderSpecs();
+  });
 
-function closeModal() {
-  document.getElementById('source-modal').classList.remove('open');
-}
-
-async function loadExecutions() {
-  var data = await fetch('/api/executions').then(function(r) { return r.json(); });
-  var tbody = document.querySelector('#executions-table tbody');
-  tbody.innerHTML = data.map(function(e) {
-    var statusBadge = e.success
-      ? '<span class="badge badge-green">OK</span>'
-      : '<span class="badge badge-red">ERR</span>';
-    var execAt = e.executed_at ? e.executed_at.slice(0,19).replace('T',' ') : '&mdash;';
-    return '<tr>' +
-      '<td><code style="color:#64748b;font-size:0.8rem">' + e.id.slice(0,8) + '</code></td>' +
-      '<td><code style="color:#a78bfa">' + e.tool_name + '</code></td>' +
-      '<td>' + statusBadge + '</td>' +
-      '<td>' + e.duration_ms.toFixed(0) + 'ms</td>' +
-      '<td style="color:#64748b;font-size:0.8rem">' + execAt + '</td>' +
-      '</tr>';
-  }).join('');
-}
-
-async function loadProjects() {
-  var data = await fetch('/api/projects').then(function(r) { return r.json(); });
-  var tbody = document.querySelector('#projects-table tbody');
-  if (!data.length) {
-    tbody.innerHTML = '<tr><td colspan="3" style="color:#64748b;text-align:center;padding:24px">No projects yet. Run <code>automcp project-create &lt;name&gt;</code></td></tr>';
-    return;
+  // Specs inline search
+  const specsSearch = document.getElementById('specs-search');
+  if (specsSearch) {
+    specsSearch.addEventListener('input', () => {
+      state.search = specsSearch.value;
+      renderSpecs();
+    });
   }
-  tbody.innerHTML = data.map(function(p) {
-    return '<tr>' +
-      '<td style="color:#a78bfa">' + p.name + '</td>' +
-      '<td style="color:#94a3b8">' + (p.description || '&mdash;') + '</td>' +
-      '<td><code style="color:#64748b;font-size:0.8rem">' + p.id.slice(0,8) + '</code></td>' +
-      '</tr>';
-  }).join('');
 }
 
-// Load initial panel
-loadSessions();
+/* ─────────────────────────────────────────────────────────────────────────────
+   TOAST SYSTEM
+───────────────────────────────────────────────────────────────────────────── */
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toast-container');
+
+  const icons = {
+    success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    error:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+    info:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+  };
+
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = (icons[type] || icons.info) + `<span>${esc(message)}</span>`;
+  container.appendChild(toast);
+
+  // Auto-dismiss
+  setTimeout(() => {
+    toast.style.animation = 'slideOut 0.2s ease forwards';
+    setTimeout(() => toast.remove(), 200);
+  }, 3000);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   SKELETON (unused externally but available)
+───────────────────────────────────────────────────────────────────────────── */
+function createSkeleton(rows, cols) {
+  const widths = ['40%', '60%', '50%', '70%', '30%', '55%'];
+  let html = '';
+  for (let r = 0; r < rows; r++) {
+    html += '<tr>';
+    for (let c = 0; c < cols; c++) {
+      const w = widths[(r * cols + c) % widths.length];
+      html += `<td><div class="skeleton" style="height:14px;width:${w}"></div></td>`;
+    }
+    html += '</tr>';
+  }
+  return html;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────────────────────────────────────────── */
+function esc(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function hl(escapedStr, query) {
+  if (!query) return escapedStr;
+  const re = new RegExp('(' + query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+  return escapedStr.replace(re, '<mark class="hl">$1</mark>');
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d)) return String(iso).slice(0, 19).replace('T', ' ');
+    return d.toLocaleString('en-US', {
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+      hour12: false,
+    });
+  } catch { return String(iso).slice(0, 19); }
+}
+
+function emptyRow(cols, msg) {
+  return `<tr><td colspan="${cols}" style="text-align:center;padding:40px 20px;color:var(--text-3);font-size:0.8125rem">${esc(msg)}</td></tr>`;
+}
 </script>
 </body>
 </html>

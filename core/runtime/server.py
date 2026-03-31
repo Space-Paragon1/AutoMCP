@@ -45,9 +45,7 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
         f"[bold green]AutoMCP 2.0[/] starting on [cyan]{h}:{p}[/]"
     )
 
-    async def _run() -> None:
-        mcp = await create_server()
-        # FastMCP run — transport="sse" for HTTP Server-Sent Events
-        mcp.run(transport="sse", host=h, port=p)
-
-    asyncio.run(_run())
+    # create_server is async (needs DB) — run it first, then hand off to FastMCP
+    # which starts its own event loop via anyio.run internally.
+    mcp = asyncio.run(create_server())
+    mcp.run(transport="sse", host=h, port=p)

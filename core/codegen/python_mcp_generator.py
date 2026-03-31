@@ -99,6 +99,7 @@ class PythonMcpGenerator:
 
     @staticmethod
     async def _save_tool_record(tool_record: GeneratedTool) -> None:
-        db = get_db()
+        from core.storage.db import AsyncDatabase
+        db = AsyncDatabase()
         async with db:
             await db.save_generated_tool(tool_record)

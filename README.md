@@ -1,133 +1,179 @@
 # AutoMCP 2.0
 
-**AutoMCP 2.0** is a browser-to-MCP tool generator. Record a browser session, let AutoMCP analyze the captured HTTP traffic with Claude, and get production-ready [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) tool files — ready to serve to any MCP client.
+**AutoMCP 2.0** turns browser sessions into MCP tools. Record a session on any web app, let Claude analyze the traffic, review the generated specs, and serve them as production-ready [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) tools — no API docs, no SDKs required.
+
+---
+
+## How it works
+
+```
+automcp record  →  automcp analyze  →  automcp review  →  automcp generate  →  automcp serve
+     │                   │                   │                   │                   │
+  Playwright          Claude API         Approve /           Jinja2 →           FastMCP
+  captures            produces           rename /            .py files           SSE server
+  traffic             ToolSpec JSON      skip each           (AST validated)     on :8000
+                      (not raw code)     spec
+```
+
+All state persists to a local SQLite database. Nothing leaves your machine except the Anthropic API call during `analyze`.
 
 ---
 
 ## Installation
 
 ```bash
-# Install the package and all dependencies
 pip install -e .
-
-# Install Playwright's Chromium browser
 playwright install chromium
-```
-
-Copy the environment file and fill in your Anthropic API key:
-
-```bash
 cp .env.example .env
-# Edit .env and set AUTOMCP_ANTHROPIC_API_KEY=sk-ant-...
+# Edit .env — set AUTOMCP_ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ---
 
-## Quick Start
+## Full command reference
 
-AutoMCP has four commands that form a pipeline:
-
-### 1. `record` — Capture browser traffic
+### `record` — Capture browser traffic
 
 ```bash
 automcp record https://app.example.com
+automcp record https://app.example.com --project myapp
+automcp record https://app.example.com --headless
 ```
 
-A Chromium window opens. Log in, click around, perform the actions you want to turn into tools. When done, close the browser window. AutoMCP saves all network requests and auth state to a local SQLite database.
+A Chromium window opens. Log in, click around, perform the actions you want to automate. Close the browser window when done. AutoMCP saves every HTTP request/response plus cookies and DOM snapshots to SQLite.
 
-**Options:**
-- `--headless` — run without a visible browser window
+Session IDs are printed after recording. Use the first 8 characters as a shorthand in all subsequent commands.
 
-### 2. `analyze` — Generate tool specs with Claude
+---
 
-```bash
-automcp analyze <session_id>
-```
-
-> `session_id` is printed after recording. You can use the full UUID or just the first 8 characters (e.g. `b1643f98`).
-
-AutoMCP filters noise (analytics, redirects, errors), clusters requests by endpoint, then sends them to Claude to generate structured `ToolSpec` objects describing each API operation.
-
-**Options:**
-- `--output <path>` — write specs JSON to a custom file path
-- `--min-confidence 0.7` — only keep specs above this confidence score (default: 0.5)
-
-### `review` — Approve specs before generating
-
-```bash
-automcp review <session_id>
-```
-
-Walk through each generated spec interactively. Approve, rename, mark as read-only, or skip each one. Only approved specs get turned into tools.
-
-### `test` — Verify a tool works
-
-```bash
-automcp test <tool_name>
-```
-
-Runs a generated tool interactively — prompts for inputs, executes against the live site using recorded auth, and prints the response.
-
-### `sessions` — List all sessions
+### `sessions` — List recorded sessions
 
 ```bash
 automcp sessions
 ```
 
-Lists all recorded sessions with their short IDs, URLs, and request counts.
+---
 
-### 3. `generate` — Render Python tool files
+### `analyze` — Generate tool specs with Claude
+
+```bash
+automcp analyze <session_id>
+automcp analyze <session_id> --min-confidence 0.7
+automcp analyze <session_id> --output my_specs.json
+```
+
+Filters out noise (analytics, redirects, errors), clusters endpoints by URL pattern, then calls Claude to produce structured `ToolSpec` JSON for each endpoint — not raw code. Specs are saved to `generated/specs/` and the database.
+
+---
+
+### `review` — Approve specs interactively
+
+```bash
+automcp review <session_id>
+```
+
+Walk through each spec one by one. For each one you can:
+- `approve` — include it in the next generate run
+- `rename` — change the tool name and purpose
+- `readonly` — mark it as a read-only tool
+- `skip` — exclude it
+
+Only approved specs are generated into tools.
+
+---
+
+### `generate` — Render Python tool files
 
 ```bash
 automcp generate <session_id>
+automcp generate <session_id> --output-dir ./my_tools
 ```
 
-Renders a Jinja2 template for each spec, producing a standalone async Python function file in `generated/tools/`. Each file is validated with AST analysis before being marked valid.
+Renders a Jinja2 template for each approved spec, producing a standalone async Python file in `generated/tools/`. Each file is validated with AST analysis (no `exec()`).
 
-**Options:**
-- `--output-dir <dir>` — write generated files to a custom directory
+---
 
-### 4. `serve` — Start the MCP server
+### `serve` — Start the MCP server
 
 ```bash
 automcp serve
+automcp serve --port 9000
 ```
 
-Loads all validated tool files and registers them with a FastMCP server, accessible over SSE at `http://127.0.0.1:8000`.
+Loads all validated tool files via `importlib` and registers them with a FastMCP server. The MCP endpoint is:
 
-**Options:**
-- `--host <host>` — override the server host
-- `--port <port>` — override the server port
+```
+http://127.0.0.1:8000/sse
+```
+
+**Connecting Claude Desktop:** add this to `%APPDATA%\Claude\claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "automcp": {
+      "url": "http://127.0.0.1:8000/sse"
+    }
+  }
+}
+```
+
+Restart Claude Desktop after editing the config. Keep `automcp serve` running in a terminal.
+
+---
+
+### `test` — Run a tool interactively
+
+```bash
+automcp test <tool_name>
+```
+
+Prompts for inputs, executes the tool against the live site using recorded auth cookies, and prints the response. Execution is logged to the database.
+
+---
 
 ### `ui` — Web dashboard
 
 ```bash
 automcp ui
+automcp ui --port 7860
 ```
 
-Opens a local web dashboard at http://127.0.0.1:7860 for reviewing sessions, approving specs, browsing generated tool source code, and viewing execution logs.
+Opens a dark-theme dashboard at `http://127.0.0.1:7860` with:
+- Sessions browser
+- Specs table with inline approve/read-only toggles
+- Tools viewer with syntax-highlighted source code
+- Execution log with success rate and duration stats
+- Projects overview
 
-### `project-create` — Organize by project
+---
+
+### `project-create` — Organize sessions by project
 
 ```bash
 automcp project-create myapp --description "My app automation"
 automcp record https://myapp.com --project myapp
 ```
 
-### `secret-set` / `secret-list` — Encrypted vault
+---
+
+### `secret-set` / `secret-get` / `secret-list` — Encrypted vault
 
 ```bash
 automcp secret-set MY_API_KEY sk-...
+automcp secret-get MY_API_KEY
 automcp secret-list
 ```
 
-Secrets are encrypted with Fernet and stored locally in `.vault.json`. The key is in `.vault.key` (both git-ignored).
+Secrets are encrypted with Fernet symmetric encryption. The key lives in `.vault.key` and the store in `.vault.json` — both git-ignored.
+
+---
 
 ### `logs` — Execution history
 
 ```bash
 automcp logs
-automcp logs --tool create_card
+automcp logs --tool get_current_member --limit 50
 ```
 
 ---
@@ -135,101 +181,40 @@ automcp logs --tool create_card
 ## Architecture
 
 ```
-Browser Session
-      │
-      ▼
-┌─────────────────────┐
-│  NetworkCapture      │  Playwright event hooks — captures every
-│  DomSnapshotter      │  HTTP request/response and DOM state
-│  ActionMapper        │
-└────────┬────────────┘
-         │  CapturedRequest[]
-         ▼
-┌─────────────────────┐
-│  EventClassifier     │  Drop analytics, redirects, server errors
-│  EndpointClusterer   │  Group by method + normalised URL template
-└────────┬────────────┘
-         │  EndpointCluster[]
-         ▼
-┌─────────────────────┐
-│  ToolSpecBuilder     │  Send clusters to Claude → ToolSpec[]
-│  (Anthropic API)     │  Quality scoring + confidence filtering
-└────────┬────────────┘
-         │  ToolSpec[]
-         ▼
-┌─────────────────────┐
-│  PythonMcpGenerator  │  Jinja2 template → .py files
-│  CodeValidator       │  AST-based syntax + safety check
-└────────┬────────────┘
-         │  GeneratedTool[]
-         ▼
-┌─────────────────────┐
-│  ToolLoader          │  importlib dynamic loading (no exec/eval)
-│  ToolRegistry        │  In-memory tool catalogue
-│  FastMCP server      │  SSE transport for MCP clients
-└─────────────────────┘
+core/
+  recorder/       Playwright session, network capture, DOM snapshot, action mapper
+  analyzer/       Event classifier, endpoint clusterer, LLM spec builder
+  auth/           Cookies, CSRF, headers, localStorage/sessionStorage, vault
+  codegen/        Jinja2 generator, AST validator, templates/
+  runtime/        importlib tool loader, registry, FastMCP server
+  storage/        Pydantic v2 models, aiosqlite database
+
+apps/
+  cli/            Typer CLI (record, analyze, review, generate, serve, test, ui, ...)
+  web/            FastAPI dashboard + Jinja2 templates
+
+generated/
+  specs/          JSON tool spec files (intermediate representation)
+  tools/          Generated Python MCP tool files
 ```
 
-All state is persisted to a local SQLite database (`automcp.db` by default).
+**Key design decisions:**
+- Claude produces structured JSON specs only — never raw code
+- Code is generated from Jinja2 templates deterministically
+- No `exec()` — tools load via `importlib.util`
+- Auth is a pluggable strategy engine (cookies, bearer, API key, CSRF)
+- Tool quality scoring: usefulness × stability × side-effect risk
 
 ---
 
-## Environment Variables
+## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `AUTOMCP_ANTHROPIC_API_KEY` | *(required)* | Your Anthropic API key |
-| `AUTOMCP_LLM_MODEL` | `claude-opus-4-5` | Claude model for spec generation |
-| `AUTOMCP_DB_PATH` | `automcp.db` | SQLite database file path |
-| `AUTOMCP_SERVER_HOST` | `127.0.0.1` | MCP server bind host |
+| `AUTOMCP_ANTHROPIC_API_KEY` | *(required)* | Anthropic API key |
+| `AUTOMCP_LLM_MODEL` | `claude-opus-4-5` | Claude model for analysis |
+| `AUTOMCP_DB_PATH` | `automcp.db` | SQLite database path |
+| `AUTOMCP_SERVER_HOST` | `127.0.0.1` | MCP server host |
 | `AUTOMCP_SERVER_PORT` | `8000` | MCP server port |
-| `AUTOMCP_MIN_CONFIDENCE_THRESHOLD` | `0.5` | Minimum spec confidence to keep |
+| `AUTOMCP_MIN_CONFIDENCE_THRESHOLD` | `0.5` | Minimum spec confidence |
 | `AUTOMCP_LOG_LEVEL` | `INFO` | Log verbosity |
-
-All variables are prefixed with `AUTOMCP_` and can be set in a `.env` file at the project root.
-
----
-
-## Project Structure
-
-```
-AutoMCP/
-├── core/
-│   ├── config.py              # Pydantic settings
-│   ├── storage/
-│   │   ├── models.py          # Pydantic data models
-│   │   └── db.py              # Async SQLite (aiosqlite)
-│   ├── auth/
-│   │   ├── cookies.py         # Cookie extraction & replay
-│   │   ├── csrf.py            # CSRF token detection
-│   │   ├── headers.py         # Header replay rules
-│   │   └── storage_tokens.py  # localStorage/sessionStorage tokens
-│   ├── recorder/
-│   │   ├── network_capture.py # Playwright network hooks
-│   │   ├── dom_snapshot.py    # DOM element snapshot
-│   │   ├── action_mapper.py   # Action label inference
-│   │   └── browser_session.py # Main recording context manager
-│   ├── analyzer/
-│   │   ├── event_classifier.py   # Filter noise requests
-│   │   ├── endpoint_clusterer.py # Group by URL template
-│   │   └── tool_spec_builder.py  # LLM-powered spec generation
-│   ├── codegen/
-│   │   ├── templates/
-│   │   │   ├── tool.py.jinja2
-│   │   │   └── server_init.py.jinja2
-│   │   ├── python_mcp_generator.py
-│   │   └── validator.py
-│   └── runtime/
-│       ├── tool_loader.py     # importlib dynamic loading
-│       ├── tool_registry.py   # In-memory tool registry
-│       └── server.py          # FastMCP server setup
-├── apps/
-│   └── cli/
-│       └── main.py            # Typer CLI commands
-├── generated/
-│   ├── specs/                 # JSON spec files
-│   └── tools/                 # Generated Python tool files
-├── pyproject.toml
-├── .env.example
-└── README.md
-```
