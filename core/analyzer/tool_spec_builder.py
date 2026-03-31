@@ -201,6 +201,20 @@ class ToolSpecBuilder:
             spec.quality_score = _score_quality(spec)
             result.append(spec)
 
+        # Infer response schemas from captured response bodies
+        from core.analyzer.schema_inferrer import SchemaInferrer
+        inferrer = SchemaInferrer()
+        for spec in result:
+            cluster = next(
+                (c for c in clusters if c.url_template == spec.url_template and c.method == spec.method),
+                None,
+            )
+            if cluster:
+                bodies = [requests_map[rid].response_body for rid in cluster.request_ids if rid in requests_map]
+                schema = inferrer.infer_from_responses(bodies)
+                if schema:
+                    spec.response_schema = schema
+
         return result
 
     async def _call_llm(

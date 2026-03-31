@@ -52,6 +52,30 @@ AutoMCP filters noise (analytics, redirects, errors), clusters requests by endpo
 - `--output <path>` — write specs JSON to a custom file path
 - `--min-confidence 0.7` — only keep specs above this confidence score (default: 0.5)
 
+### `review` — Approve specs before generating
+
+```bash
+automcp review <session_id>
+```
+
+Walk through each generated spec interactively. Approve, rename, mark as read-only, or skip each one. Only approved specs get turned into tools.
+
+### `test` — Verify a tool works
+
+```bash
+automcp test <tool_name>
+```
+
+Runs a generated tool interactively — prompts for inputs, executes against the live site using recorded auth, and prints the response.
+
+### `sessions` — List all sessions
+
+```bash
+automcp sessions
+```
+
+Lists all recorded sessions with their short IDs, URLs, and request counts.
+
 ### 3. `generate` — Render Python tool files
 
 ```bash

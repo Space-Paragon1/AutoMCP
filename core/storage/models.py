@@ -44,6 +44,10 @@ class ToolSpec(BaseModel):
     session_id: str | None = None
     spec_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    approved: bool = False
+    is_readonly: bool = False
+    version: int = 1
+    response_schema: dict | None = None
 
 
 class CapturedRequest(BaseModel):
@@ -88,6 +92,7 @@ class GeneratedTool(BaseModel):
     generated_at: datetime = Field(default_factory=datetime.utcnow)
     validation_status: Literal["valid", "invalid", "pending"] = "pending"
     validation_errors: list[str] = Field(default_factory=list)
+    version: int = 1
 
 
 class ValidationResult(BaseModel):
