@@ -124,7 +124,10 @@ async def _analyze(
     with console.status("[bold green]Loading captured requests...[/]"):
         db = get_db()
         async with db:
-            requests = await db.get_requests_for_session(session_id)
+            full_session_id = await db.resolve_session_id(session_id) or session_id
+            requests = await db.get_requests_for_session(full_session_id)
+
+    session_id = full_session_id  # always use full UUID from here on
 
     if not requests:
         console.print(f"[red]No requests found for session {session_id}[/]")
