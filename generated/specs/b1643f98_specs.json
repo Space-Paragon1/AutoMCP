@@ -1,0 +1,825 @@
+[
+  {
+    "tool_name": "create_trello_board",
+    "purpose": "Creates a new Trello board with specified name, organization, background, and permissions",
+    "method": "POST",
+    "url_template": "https://trello.com/1/boards",
+    "auth_strategy": "cookies",
+    "csrf_strategy": "dsc",
+    "inputs": [
+      {
+        "name": "name",
+        "type": "string",
+        "required": true,
+        "description": "Name of the board"
+      },
+      {
+        "name": "idOrganization",
+        "type": "string",
+        "required": true,
+        "description": "ID of the organization/workspace"
+      },
+      {
+        "name": "defaultLists",
+        "type": "boolean",
+        "required": false,
+        "description": "Whether to create default lists"
+      },
+      {
+        "name": "prefs_background_url",
+        "type": "string",
+        "required": false,
+        "description": "URL for the board background image"
+      },
+      {
+        "name": "prefs_permissionLevel",
+        "type": "string",
+        "required": false,
+        "description": "Permission level (org, private, public)"
+      },
+      {
+        "name": "prefs_selfJoin",
+        "type": "boolean",
+        "required": false,
+        "description": "Whether members can self-join"
+      }
+    ],
+    "request_mapping": {
+      "name": "$input.name",
+      "idOrganization": "$input.idOrganization",
+      "defaultLists": "$input.defaultLists",
+      "prefs_background_url": "$input.prefs_background_url",
+      "prefs_permissionLevel": "$input.prefs_permissionLevel",
+      "prefs_selfJoin": "$input.prefs_selfJoin"
+    },
+    "response_type": "json",
+    "confidence": 0.95,
+    "quality_score": {
+      "usefulness": 0.7,
+      "stability": 0.9,
+      "side_effect_risk": 0.7,
+      "composite": 0.64
+    },
+    "session_id": "b1643f98",
+    "spec_id": "798b86de-82af-4961-a4a7-5f09f37f7f65",
+    "created_at": "2026-03-31T18:20:24.474033"
+  },
+  {
+    "tool_name": "create_trello_list",
+    "purpose": "Creates a new list on a Trello board",
+    "method": "POST",
+    "url_template": "https://trello.com/1/lists",
+    "auth_strategy": "cookies",
+    "csrf_strategy": "dsc",
+    "inputs": [
+      {
+        "name": "idBoard",
+        "type": "string",
+        "required": true,
+        "description": "ID of the board to add the list to"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "required": true,
+        "description": "Name of the list"
+      },
+      {
+        "name": "pos",
+        "type": "integer",
+        "required": false,
+        "description": "Position of the list on the board"
+      }
+    ],
+    "request_mapping": {
+      "idBoard": "$input.idBoard",
+      "name": "$input.name",
+      "pos": "$input.pos"
+    },
+    "response_type": "json",
+    "confidence": 0.95,
+    "quality_score": {
+      "usefulness": 0.7,
+      "stability": 0.9,
+      "side_effect_risk": 0.7,
+      "composite": 0.64
+    },
+    "session_id": "b1643f98",
+    "spec_id": "2dad2402-ef98-45eb-a172-acfc67cca346",
+    "created_at": "2026-03-31T18:20:24.474116"
+  },
+  {
+    "tool_name": "create_trello_card",
+    "purpose": "Creates a new card in a Trello list",
+    "method": "POST",
+    "url_template": "https://trello.com/1/cards",
+    "auth_strategy": "cookies",
+    "csrf_strategy": "dsc",
+    "inputs": [
+      {
+        "name": "idList",
+        "type": "string",
+        "required": true,
+        "description": "ID of the list to add the card to"
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "required": true,
+        "description": "Name/title of the card"
+      },
+      {
+        "name": "closed",
+        "type": "boolean",
+        "required": false,
+        "description": "Whether the card is archived"
+      },
+      {
+        "name": "isTemplate",
+        "type": "boolean",
+        "required": false,
+        "description": "Whether this is a template card"
+      },
+      {
+        "name": "pos",
+        "type": "integer",
+        "required": false,
+        "description": "Position of the card in the list"
+      },
+      {
+        "name": "dueComplete",
+        "type": "boolean",
+        "required": false,
+        "description": "Whether the due date is marked complete"
+      }
+    ],
+    "request_mapping": {
+      "idList": "$input.idList",
+      "name": "$input.name",
+      "closed": "$input.closed",
+      "isTemplate": "$input.isTemplate",
+      "pos": "$input.pos",
+      "dueComplete": "$input.dueComplete"
+    },
+    "response_type": "json",
+    "confidence": 0.95,
+    "quality_score": {
+      "usefulness": 0.7,
+      "stability": 0.9,
+      "side_effect_risk": 0.7,
+      "composite": 0.64
+    },
+    "session_id": "b1643f98",
+    "spec_id": "1c07d1ed-d25a-41c0-ad8d-aef01c571868",
+    "created_at": "2026-03-31T18:20:24.474163"
+  },
+  {
+    "tool_name": "mark_board_as_viewed",
+    "purpose": "Marks a Trello board as viewed by the current user",
+    "method": "POST",
+    "url_template": "https://trello.com/1/boards/{board_id}/markAsViewed",
+    "auth_strategy": "cookies",
+    "csrf_strategy": "dsc",
+    "inputs": [
+      {
+        "name": "board_id",
+        "type": "string",
+        "required": true,
+        "description": "ID of the board to mark as viewed"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.85,
+    "quality_score": {
+      "usefulness": 0.7,
+      "stability": 0.7,
+      "side_effect_risk": 0.7,
+      "composite": 0.58
+    },
+    "session_id": "b1643f98",
+    "spec_id": "f3976870-d153-4443-b47e-ae8189c6e4cc",
+    "created_at": "2026-03-31T18:20:24.474810"
+  },
+  {
+    "tool_name": "get_current_member",
+    "purpose": "Retrieves the current authenticated member's information including boards and organizations",
+    "method": "GET",
+    "url_template": "https://trello.com/1/member/me",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of member fields to return"
+      },
+      {
+        "name": "boards",
+        "type": "string",
+        "required": false,
+        "description": "Board filter (open, starred, etc.)"
+      },
+      {
+        "name": "board_fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of board fields to return"
+      },
+      {
+        "name": "organizations",
+        "type": "string",
+        "required": false,
+        "description": "Organization filter (all, etc.)"
+      },
+      {
+        "name": "organization_fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of organization fields"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.9,
+    "quality_score": {
+      "usefulness": 0.5,
+      "stability": 0.9,
+      "side_effect_risk": 0.1,
+      "composite": 0.74
+    },
+    "session_id": "b1643f98",
+    "spec_id": "332989fd-13e6-4dcf-ab96-c63624e85421",
+    "created_at": "2026-03-31T18:20:24.474894"
+  },
+  {
+    "tool_name": "get_member_by_id",
+    "purpose": "Retrieves a member's information by their ID including organizations and enterprise details",
+    "method": "GET",
+    "url_template": "https://trello.com/1/member/{member_id}",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "member_id",
+        "type": "string",
+        "required": true,
+        "description": "ID of the member to retrieve"
+      },
+      {
+        "name": "fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of member fields"
+      },
+      {
+        "name": "organizations",
+        "type": "string",
+        "required": false,
+        "description": "Organization filter"
+      },
+      {
+        "name": "organization_fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of organization fields"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.9,
+    "quality_score": {
+      "usefulness": 0.5,
+      "stability": 0.7,
+      "side_effect_risk": 0.1,
+      "composite": 0.68
+    },
+    "session_id": "b1643f98",
+    "spec_id": "855aae72-9593-46c6-938b-2ca998fdd931",
+    "created_at": "2026-03-31T18:20:24.474940"
+  },
+  {
+    "tool_name": "get_board_by_id",
+    "purpose": "Retrieves detailed information about a Trello board by its ID",
+    "method": "GET",
+    "url_template": "https://trello.com/1/board/{board_id}",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "board_id",
+        "type": "string",
+        "required": true,
+        "description": "ID or short link of the board"
+      },
+      {
+        "name": "fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of board fields to return"
+      },
+      {
+        "name": "boardPlugins",
+        "type": "boolean",
+        "required": false,
+        "description": "Include board plugins"
+      },
+      {
+        "name": "plugins",
+        "type": "string",
+        "required": false,
+        "description": "Plugin filter (enabled, etc.)"
+      },
+      {
+        "name": "members",
+        "type": "string",
+        "required": false,
+        "description": "Member filter (all, etc.)"
+      },
+      {
+        "name": "labels",
+        "type": "string",
+        "required": false,
+        "description": "Label filter (all, etc.)"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.92,
+    "quality_score": {
+      "usefulness": 0.5,
+      "stability": 0.7,
+      "side_effect_risk": 0.1,
+      "composite": 0.68
+    },
+    "session_id": "b1643f98",
+    "spec_id": "e3b8d92e-6f99-48e7-bf70-872f48037aa6",
+    "created_at": "2026-03-31T18:20:24.475012"
+  },
+  {
+    "tool_name": "get_board_by_shortlink",
+    "purpose": "Retrieves detailed board information using the board's short link",
+    "method": "GET",
+    "url_template": "https://trello.com/1/board/{short_link}",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "short_link",
+        "type": "string",
+        "required": true,
+        "description": "Short link identifier of the board (e.g., 1YX5vCoj)"
+      },
+      {
+        "name": "fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of board fields"
+      },
+      {
+        "name": "organization",
+        "type": "boolean",
+        "required": false,
+        "description": "Include organization details"
+      },
+      {
+        "name": "members",
+        "type": "string",
+        "required": false,
+        "description": "Member filter"
+      },
+      {
+        "name": "labels",
+        "type": "string",
+        "required": false,
+        "description": "Label filter"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.9,
+    "quality_score": {
+      "usefulness": 0.5,
+      "stability": 0.7,
+      "side_effect_risk": 0.1,
+      "composite": 0.68
+    },
+    "session_id": "b1643f98",
+    "spec_id": "e957aaa2-f95c-42d6-8dba-a64f58f7411d",
+    "created_at": "2026-03-31T18:20:24.475068"
+  },
+  {
+    "tool_name": "get_organization",
+    "purpose": "Retrieves organization/workspace details including members and settings",
+    "method": "GET",
+    "url_template": "https://trello.com/1/organization/{organization_id}",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "organization_id",
+        "type": "string",
+        "required": true,
+        "description": "ID or name of the organization"
+      },
+      {
+        "name": "fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of organization fields"
+      },
+      {
+        "name": "members",
+        "type": "string",
+        "required": false,
+        "description": "Member filter (all, etc.)"
+      },
+      {
+        "name": "member_fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of member fields"
+      },
+      {
+        "name": "collaborators",
+        "type": "boolean",
+        "required": false,
+        "description": "Include collaborators"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.9,
+    "quality_score": {
+      "usefulness": 0.5,
+      "stability": 0.7,
+      "side_effect_risk": 0.1,
+      "composite": 0.68
+    },
+    "session_id": "b1643f98",
+    "spec_id": "d2030bd9-8894-44ba-a805-e8218ea9859f",
+    "created_at": "2026-03-31T18:20:24.475105"
+  },
+  {
+    "tool_name": "get_notifications_count",
+    "purpose": "Retrieves the count of notifications for the current user",
+    "method": "GET",
+    "url_template": "https://trello.com/1/members/me/notificationsCount",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "grouped",
+        "type": "boolean",
+        "required": false,
+        "description": "Whether to group notifications"
+      },
+      {
+        "name": "filter",
+        "type": "string",
+        "required": false,
+        "description": "Notification filter (all, unread, etc.)"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.85,
+    "quality_score": {
+      "usefulness": 0.5,
+      "stability": 0.9,
+      "side_effect_risk": 0.1,
+      "composite": 0.74
+    },
+    "session_id": "b1643f98",
+    "spec_id": "9a61153b-681c-4984-b858-44b500c3bf43",
+    "created_at": "2026-03-31T18:20:24.475134"
+  },
+  {
+    "tool_name": "get_notification_groups",
+    "purpose": "Retrieves grouped notifications for the current user with card details",
+    "method": "GET",
+    "url_template": "https://trello.com/1/members/me/notificationGroups",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "limit",
+        "type": "integer",
+        "required": false,
+        "description": "Maximum number of notification groups to return"
+      },
+      {
+        "name": "skip",
+        "type": "integer",
+        "required": false,
+        "description": "Number of notification groups to skip"
+      },
+      {
+        "name": "read_filter",
+        "type": "string",
+        "required": false,
+        "description": "Filter by read status (unread, read, all)"
+      },
+      {
+        "name": "card_fields",
+        "type": "string",
+        "required": false,
+        "description": "Comma-separated list of card fields"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.85,
+    "quality_score": {
+      "usefulness": 0.5,
+      "stability": 0.9,
+      "side_effect_risk": 0.1,
+      "composite": 0.74
+    },
+    "session_id": "b1643f98",
+    "spec_id": "6fa86158-a2b9-433b-88c0-66c2e4c2786d",
+    "created_at": "2026-03-31T18:20:24.475172"
+  },
+  {
+    "tool_name": "get_template_categories",
+    "purpose": "Retrieves available template categories for board creation",
+    "method": "GET",
+    "url_template": "https://trello.com/1/resources/templates/categories",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.9,
+    "quality_score": {
+      "usefulness": 0.3,
+      "stability": 0.9,
+      "side_effect_risk": 0.1,
+      "composite": 0.66
+    },
+    "session_id": "b1643f98",
+    "spec_id": "ad9e2e8a-5bf3-4b5a-9415-a5d60583b8f2",
+    "created_at": "2026-03-31T18:20:24.475195"
+  },
+  {
+    "tool_name": "get_board_plugins",
+    "purpose": "Retrieves enabled plugins for a specific board",
+    "method": "GET",
+    "url_template": "https://trello.com/1/boards/{board_id}/plugins",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "board_id",
+        "type": "string",
+        "required": true,
+        "description": "ID of the board"
+      },
+      {
+        "name": "filter",
+        "type": "string",
+        "required": false,
+        "description": "Plugin filter (enabled, etc.)"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.88,
+    "quality_score": {
+      "usefulness": 0.5,
+      "stability": 0.7,
+      "side_effect_risk": 0.1,
+      "composite": 0.68
+    },
+    "session_id": "b1643f98",
+    "spec_id": "669fa6b4-dffc-4046-8f21-7c47efed4a7b",
+    "created_at": "2026-03-31T18:20:24.475223"
+  },
+  {
+    "tool_name": "execute_trello_graphql",
+    "purpose": "Executes a GraphQL query against the Trello API for advanced data fetching",
+    "method": "POST",
+    "url_template": "https://trello.com/gateway/api/graphql",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "operationName",
+        "type": "string",
+        "required": true,
+        "description": "Name of the GraphQL operation"
+      },
+      {
+        "name": "query",
+        "type": "string",
+        "required": true,
+        "description": "GraphQL query string"
+      },
+      {
+        "name": "variables",
+        "type": "object",
+        "required": false,
+        "description": "Variables for the GraphQL query"
+      }
+    ],
+    "request_mapping": {
+      "operationName": "$input.operationName",
+      "query": "$input.query",
+      "variables": "$input.variables"
+    },
+    "response_type": "json",
+    "confidence": 0.88,
+    "quality_score": {
+      "usefulness": 0.7,
+      "stability": 0.9,
+      "side_effect_risk": 0.7,
+      "composite": 0.64
+    },
+    "session_id": "b1643f98",
+    "spec_id": "f59152f7-6b7d-4541-9265-68712603b813",
+    "created_at": "2026-03-31T18:20:24.475258"
+  },
+  {
+    "tool_name": "send_session_heartbeat",
+    "purpose": "Sends a heartbeat to keep the Trello session alive",
+    "method": "POST",
+    "url_template": "https://trello.com/gateway/api/session/heartbeat",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.8,
+    "quality_score": {
+      "usefulness": 0.7,
+      "stability": 0.9,
+      "side_effect_risk": 0.7,
+      "composite": 0.64
+    },
+    "session_id": "b1643f98",
+    "spec_id": "ed491eb0-88ed-4501-b978-74145de4846f",
+    "created_at": "2026-03-31T18:20:24.475284"
+  },
+  {
+    "tool_name": "get_user_cookie_consents",
+    "purpose": "Retrieves the current user's cookie consent preferences",
+    "method": "GET",
+    "url_template": "https://trello.com/gateway/api/consenthub/session/user/consents/cookies",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.75,
+    "quality_score": {
+      "usefulness": 0.3,
+      "stability": 0.9,
+      "side_effect_risk": 0.1,
+      "composite": 0.66
+    },
+    "session_id": "b1643f98",
+    "spec_id": "82901c04-cf21-4d7b-a2e8-e3fce2496135",
+    "created_at": "2026-03-31T18:20:24.475311"
+  },
+  {
+    "tool_name": "get_unsplash_photo_download_url",
+    "purpose": "Gets the download URL for an Unsplash photo to use as board background",
+    "method": "GET",
+    "url_template": "https://trello.com/proxy/unsplash/photos/{photo_id}/download",
+    "auth_strategy": "cookies",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "photo_id",
+        "type": "string",
+        "required": true,
+        "description": "Unsplash photo ID"
+      },
+      {
+        "name": "ixid",
+        "type": "string",
+        "required": false,
+        "description": "Unsplash tracking identifier"
+      }
+    ],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.82,
+    "quality_score": {
+      "usefulness": 0.5,
+      "stability": 0.7,
+      "side_effect_risk": 0.1,
+      "composite": 0.68
+    },
+    "session_id": "b1643f98",
+    "spec_id": "8247ec07-5d70-4ad1-a5dc-0e5e7c7f9525",
+    "created_at": "2026-03-31T18:20:24.475338"
+  },
+  {
+    "tool_name": "check_atlassian_username",
+    "purpose": "Checks if a username/email exists and determines available authentication methods",
+    "method": "POST",
+    "url_template": "https://id.atlassian.com/rest/check-username",
+    "auth_strategy": "none",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "username",
+        "type": "string",
+        "required": true,
+        "description": "Email or username to check"
+      },
+      {
+        "name": "application",
+        "type": "string",
+        "required": false,
+        "description": "Application context (trello, jira, etc.)"
+      },
+      {
+        "name": "continue",
+        "type": "string",
+        "required": false,
+        "description": "Callback URL after authentication"
+      }
+    ],
+    "request_mapping": {
+      "username": "$input.username"
+    },
+    "response_type": "json",
+    "confidence": 0.75,
+    "quality_score": {
+      "usefulness": 0.7,
+      "stability": 0.9,
+      "side_effect_risk": 0.7,
+      "composite": 0.64
+    },
+    "session_id": "b1643f98",
+    "spec_id": "b39eb1c1-eeb8-4e1d-a8ff-6a3be78ca05c",
+    "created_at": "2026-03-31T18:20:24.475380"
+  },
+  {
+    "tool_name": "verify_mfa_code",
+    "purpose": "Verifies a multi-factor authentication code during Atlassian login",
+    "method": "POST",
+    "url_template": "https://id.atlassian.com/rest/mfa/verify",
+    "auth_strategy": "none",
+    "csrf_strategy": null,
+    "inputs": [
+      {
+        "name": "otpCode",
+        "type": "string",
+        "required": true,
+        "description": "One-time password code from authenticator or email"
+      },
+      {
+        "name": "token",
+        "type": "string",
+        "required": true,
+        "description": "Session token from authentication flow"
+      },
+      {
+        "name": "transactionToken",
+        "type": "string",
+        "required": true,
+        "description": "MFA transaction token"
+      }
+    ],
+    "request_mapping": {
+      "otpCode": "$input.otpCode",
+      "token": "$input.token"
+    },
+    "response_type": "json",
+    "confidence": 0.7,
+    "quality_score": {
+      "usefulness": 0.7,
+      "stability": 0.9,
+      "side_effect_risk": 0.7,
+      "composite": 0.64
+    },
+    "session_id": "b1643f98",
+    "spec_id": "34345ed4-2f7b-4cc4-a4b0-41c27da355e2",
+    "created_at": "2026-03-31T18:20:24.475417"
+  },
+  {
+    "tool_name": "get_geolocation",
+    "purpose": "Gets the user's geographic location for consent and localization purposes",
+    "method": "GET",
+    "url_template": "https://geolocation.onetrust.com/cookieconsentpub/v1/geo/location",
+    "auth_strategy": "none",
+    "csrf_strategy": null,
+    "inputs": [],
+    "request_mapping": {},
+    "response_type": "json",
+    "confidence": 0.8,
+    "quality_score": {
+      "usefulness": 0.3,
+      "stability": 0.9,
+      "side_effect_risk": 0.1,
+      "composite": 0.66
+    },
+    "session_id": "b1643f98",
+    "spec_id": "e792bba1-8cc0-4986-886c-b75af09011e8",
+    "created_at": "2026-03-31T18:20:24.475446"
+  }
+]
