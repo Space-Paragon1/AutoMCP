@@ -149,6 +149,22 @@ class BrowserSession:
             except Exception:
                 pass
 
+    def _extract_cookies_from_requests(self) -> dict[str, str]:
+        """Fallback: parse cookies from captured request Cookie headers."""
+        cookies: dict[str, str] = {}
+        for req in self._captured_requests:
+            header = (
+                req.request_headers.get("cookie")
+                or req.request_headers.get("Cookie")
+                or ""
+            )
+            for part in header.split(";"):
+                part = part.strip()
+                if "=" in part:
+                    k, _, v = part.partition("=")
+                    cookies[k.strip()] = v.strip()
+        return cookies
+
     async def _extract_auth_state(self) -> None:
         """Extract cookies, headers, and storage tokens from the browser."""
         if not self._context:
@@ -156,7 +172,13 @@ class BrowserSession:
 
         try:
             cookie_strategy = CookieStrategy()
-            cookies = await cookie_strategy.extract(self._context)
+            try:
+                cookies = await cookie_strategy.extract(self._context)
+            except Exception:
+                # Browser already closed — fall back to request headers
+                cookies = self._extract_cookies_from_requests()
+                console.print("[dim]Cookies extracted from captured request headers.[/]")
+
             auth_cookies = cookie_strategy.detect_auth_cookies(cookies)
 
             header_rules = HeaderReplayRules.analyze(self._captured_requests)
@@ -164,6 +186,7 @@ class BrowserSession:
             self._auth_state = {
                 "cookies": cookies,
                 "auth_cookie_names": auth_cookies,
+                "recorded_at": datetime.utcnow().isoformat(),
                 "replay_headers": {
                     r.header_name: r.header_value for r in header_rules.rules
                 },
