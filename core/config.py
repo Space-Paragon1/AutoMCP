@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     )
 
     anthropic_api_key: str = Field(default="", description="Anthropic API key")
+    openai_api_key: str = Field(default="", description="OpenAI API key")
+    gemini_api_key: str = Field(default="", description="Google Gemini API key")
     db_path: Path = Field(default=Path("automcp.db"), description="SQLite database path")
     generated_specs_dir: Path = Field(default=Path("generated/specs"))
     generated_tools_dir: Path = Field(default=Path("generated/tools"))

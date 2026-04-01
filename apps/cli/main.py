@@ -104,19 +104,21 @@ def analyze(
     min_confidence: float = typer.Option(
         None, "--min-confidence", help="Minimum confidence threshold"
     ),
+    provider: str = typer.Option("anthropic", "--provider", help="LLM provider: anthropic, openai, gemini"),
 ) -> None:
     """Analyze captured requests and generate tool specs."""
-    asyncio.run(_analyze(session_id, output, min_confidence))
+    asyncio.run(_analyze(session_id, output, min_confidence, provider))
 
 
 async def _analyze(
     session_id: str,
     output: Path | None,
     min_confidence: float | None,
+    provider: str = "anthropic",
 ) -> None:
     from core.analyzer.endpoint_clusterer import EndpointClusterer
     from core.analyzer.event_classifier import EventClassifier
-    from core.analyzer.tool_spec_builder import ToolSpecBuilder
+    from core.analyzer.tool_spec_builder import LLMProvider, ToolSpecBuilder
     from core.storage.db import get_db
 
     threshold = min_confidence if min_confidence is not None else settings.min_confidence_threshold
@@ -161,7 +163,7 @@ async def _analyze(
         raise typer.Exit(1)
 
     with console.status(f"[bold green]Analyzing with {settings.llm_model}...[/]"):
-        builder = ToolSpecBuilder()
+        builder = ToolSpecBuilder(provider=LLMProvider(provider))
         requests_map = {r.id: r for r in filtered}
         specs = await builder.build_specs(clusters, requests_map, session_id)
 
@@ -470,6 +472,176 @@ async def _logs(tool_name: str | None, limit: int) -> None:
             f"{ex.duration_ms:.0f}ms",
             ex.executed_at.strftime("%Y-%m-%d %H:%M:%S"),
         )
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# auth-check
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def auth_check(
+    session_id: str = typer.Argument(..., help="Session ID to check auth for"),
+    probe_url: str = typer.Option(None, "--probe", "-u", help="URL to probe (defaults to recorded site URL)"),
+):
+    """Check if recorded auth credentials are still valid."""
+    asyncio.run(_auth_check(session_id, probe_url))
+
+
+async def _auth_check(session_id: str, probe_url: str | None) -> None:
+    from core.auth.session_health import SessionHealthChecker
+    from core.storage.db import get_db
+    import json
+
+    db = get_db()
+    async with db:
+        full_id = await db.resolve_session_id(session_id) or session_id
+        session = await db.get_session(full_id)
+
+    if session is None:
+        console.print(f"[red]Session not found:[/] {session_id}")
+        raise typer.Exit(1)
+
+    cookies = session.browser_context_state.get("cookies", {})
+    if not cookies:
+        console.print("[yellow]No cookies found in session state.[/]")
+        console.print("The session may not have captured auth cookies.")
+        return
+
+    url = probe_url or session.url
+    console.print(f"Probing [cyan]{url}[/] with {len(cookies)} cookies...")
+
+    checker = SessionHealthChecker()
+    health = await checker.check(url, cookies)
+    health.session_id = full_id
+
+    age = checker.get_cookies_age_hours(session.browser_context_state)
+
+    from rich.table import Table
+    table = Table(show_header=False, box=None)
+    table.add_column("Field", style="dim")
+    table.add_column("Value")
+
+    table.add_row("Session", full_id[:8])
+    table.add_row("URL", url)
+    table.add_row("Status", "[green]Valid[/]" if health.is_valid else "[red]Expired[/]")
+    table.add_row("HTTP Status", str(health.status_code or "—"))
+    table.add_row("Cookie Age", f"{age:.1f} hours")
+    if health.error:
+        table.add_row("Error", f"[red]{health.error}[/]")
+
+    console.print(table)
+
+    if not health.is_valid:
+        console.print(
+            f"\n[yellow]Credentials appear expired.[/] "
+            f"Re-record with: [bold]automcp record {session.url}[/]"
+        )
+
+
+# ---------------------------------------------------------------------------
+# auth-refresh
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def auth_refresh(
+    session_id: str = typer.Argument(..., help="Session ID to refresh auth for"),
+):
+    """Re-open the browser to refresh expired auth credentials."""
+    asyncio.run(_auth_refresh(session_id))
+
+
+async def _auth_refresh(session_id: str) -> None:
+    from core.storage.db import get_db
+    from core.recorder.browser_session import BrowserSession
+
+    db = get_db()
+    async with db:
+        full_id = await db.resolve_session_id(session_id) or session_id
+        session = await db.get_session(full_id)
+
+    if session is None:
+        console.print(f"[red]Session not found:[/] {session_id}")
+        raise typer.Exit(1)
+
+    console.print(Panel(
+        f"[bold]Refreshing auth for session[/] [cyan]{full_id[:8]}[/]\n"
+        f"URL: [cyan]{session.url}[/]\n\n"
+        "Log in again in the browser window, then close it.",
+        title="AutoMCP 2.0 — Auth Refresh",
+    ))
+
+    try:
+        async with BrowserSession(url=session.url, headless=False, project_id=session.project_id) as new_session:
+            while True:
+                await asyncio.sleep(1)
+    except (KeyboardInterrupt, Exception):
+        pass
+
+    console.print(f"\n[green]Auth refreshed.[/] New session saved.")
+    console.print("Your existing tools will use the new credentials on next `automcp serve`.")
+
+
+# ---------------------------------------------------------------------------
+# drift-check
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def drift_check(
+    session_id: str = typer.Argument(..., help="Session ID to check for API drift"),
+):
+    """Check if live API responses still match recorded schemas."""
+    asyncio.run(_drift_check(session_id))
+
+
+async def _drift_check(session_id: str) -> None:
+    from core.analyzer.drift_detector import DriftDetector
+    from core.storage.db import get_db
+    from rich.table import Table
+
+    db = get_db()
+    async with db:
+        full_id = await db.resolve_session_id(session_id) or session_id
+        session = await db.get_session(full_id)
+        specs = await db.get_tool_specs(session_id=full_id)
+
+    if not session:
+        console.print(f"[red]Session not found:[/] {session_id}")
+        raise typer.Exit(1)
+
+    get_specs = [s for s in specs if s.method == "GET" and s.response_schema and s.approved]
+
+    if not get_specs:
+        console.print("[yellow]No GET specs with recorded schemas found.[/]")
+        console.print("Run [bold]automcp analyze[/] again to capture response schemas.")
+        return
+
+    cookies = session.browser_context_state.get("cookies", {})
+    detector = DriftDetector()
+
+    table = Table(title="API Drift Report")
+    table.add_column("Tool", style="cyan")
+    table.add_column("Status")
+    table.add_column("Added Fields")
+    table.add_column("Removed Fields")
+
+    with console.status(f"[bold green]Checking {len(get_specs)} endpoints...[/]"):
+        for spec in get_specs:
+            report = await detector.check(spec, cookies)
+            if report.error:
+                status = f"[yellow]? {report.error[:30]}[/]"
+            elif report.has_drift:
+                status = "[red]⚠ Drift detected[/]"
+            else:
+                status = "[green]✓ OK[/]"
+
+            added = ", ".join(report.added_fields[:3]) or "—"
+            removed = ", ".join(report.removed_fields[:3]) or "—"
+            table.add_row(spec.tool_name, status, added, removed)
+
     console.print(table)
 
 

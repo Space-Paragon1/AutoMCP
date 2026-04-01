@@ -178,6 +178,36 @@ automcp logs --tool get_current_member --limit 50
 
 ---
 
+## Auth management
+
+### Check if credentials are still valid
+```bash
+automcp auth-check <session_id>
+automcp auth-check <session_id> --probe https://trello.com/1/members/me
+```
+
+### Refresh expired credentials
+```bash
+automcp auth-refresh <session_id>
+```
+Re-opens the browser so you can log in again. Updates the stored cookies without losing your generated tools.
+
+### Check for API drift
+```bash
+automcp drift-check <session_id>
+```
+Makes live requests to each recorded GET endpoint and compares the response schema to what was recorded. Flags any endpoints where the API has changed.
+
+## Multi-model support
+
+```bash
+automcp analyze <session_id>                          # default: Anthropic
+automcp analyze <session_id> --provider openai        # requires AUTOMCP_OPENAI_API_KEY
+automcp analyze <session_id> --provider gemini        # requires AUTOMCP_GEMINI_API_KEY
+```
+
+---
+
 ## Architecture
 
 ```
