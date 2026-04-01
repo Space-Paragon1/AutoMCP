@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from enum import Enum
 from typing import Any
 
 import anthropic
@@ -62,6 +63,12 @@ JSON Schema for ToolSpec:
   "response_type": "json|text|binary",
   "confidence": 0.0-1.0
 }"""
+
+
+class LLMProvider(str, Enum):
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    GEMINI = "gemini"
 
 
 def _build_cluster_prompt(
@@ -156,12 +163,29 @@ def _score_quality(spec: ToolSpec) -> QualityScore:
 
 
 class ToolSpecBuilder:
-    """Uses the Anthropic API to generate ToolSpec objects from endpoint clusters."""
+    """Uses an LLM to generate ToolSpec objects from endpoint clusters."""
 
-    def __init__(self, client: anthropic.AsyncAnthropic | None = None) -> None:
-        self._client = client or anthropic.AsyncAnthropic(
-            api_key=settings.anthropic_api_key
-        )
+    def __init__(
+        self,
+        client: anthropic.AsyncAnthropic | None = None,
+        provider: LLMProvider = LLMProvider.ANTHROPIC,
+    ) -> None:
+        self._provider = provider
+        if provider == LLMProvider.ANTHROPIC:
+            self._client = client or anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        elif provider == LLMProvider.OPENAI:
+            try:
+                import openai
+                self._openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+            except ImportError:
+                raise ImportError("Install openai: pip install openai")
+        elif provider == LLMProvider.GEMINI:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=settings.gemini_api_key)
+                self._gemini_model = genai.GenerativeModel("gemini-1.5-pro")
+            except ImportError:
+                raise ImportError("Install google-generativeai: pip install google-generativeai")
 
     async def build_specs(
         self,
@@ -222,6 +246,20 @@ class ToolSpecBuilder:
         user_content: str,
         retry_context: str | None,
     ) -> list[ToolSpec]:
+        """Route to the appropriate LLM provider."""
+        if self._provider == LLMProvider.ANTHROPIC:
+            return await self._call_anthropic(user_content, retry_context)
+        elif self._provider == LLMProvider.OPENAI:
+            return await self._call_openai(user_content, retry_context)
+        elif self._provider == LLMProvider.GEMINI:
+            return await self._call_gemini(user_content, retry_context)
+        return []
+
+    async def _call_anthropic(
+        self,
+        user_content: str,
+        retry_context: str | None,
+    ) -> list[ToolSpec]:
         """Call the LLM and parse the response into ToolSpec objects."""
         messages: list[dict[str, str]] = [{"role": "user", "content": user_content}]
         if retry_context:
@@ -255,8 +293,54 @@ class ToolSpecBuilder:
             if retry_context is None:
                 # Retry once with error feedback
                 error_msg = f"Validation errors: {e}\n\nYour response was:\n{raw_text}"
-                return await self._call_llm(user_content, retry_context=error_msg)
+                return await self._call_anthropic(user_content, retry_context=error_msg)
             # Give up and return empty list
+            return []
+
+    async def _call_openai(self, user_content: str, retry_context: str | None) -> list[ToolSpec]:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+        if retry_context:
+            messages.append({"role": "assistant", "content": retry_context})
+            messages.append({"role": "user", "content": "Fix the validation errors above and return valid JSON only."})
+
+        response = await self._openai_client.chat.completions.create(
+            model=settings.llm_model if "gpt" in settings.llm_model else "gpt-4o",
+            messages=messages,
+            max_tokens=8192,
+        )
+        raw_text = response.choices[0].message.content.strip()
+        json_text = _extract_json(raw_text)
+        try:
+            data = json.loads(json_text)
+            if not isinstance(data, list):
+                data = [data]
+            return [ToolSpec.model_validate(item) for item in data]
+        except Exception as e:
+            if retry_context is None:
+                return await self._call_openai(user_content, retry_context=f"Errors: {e}\nYour response: {raw_text}")
+            return []
+
+    async def _call_gemini(self, user_content: str, retry_context: str | None) -> list[ToolSpec]:
+        import asyncio
+        prompt = f"{SYSTEM_PROMPT}\n\n{user_content}"
+        if retry_context:
+            prompt += f"\n\nFix these errors: {retry_context}"
+        response = await asyncio.get_event_loop().run_in_executor(
+            None, self._gemini_model.generate_content, prompt
+        )
+        raw_text = response.text.strip()
+        json_text = _extract_json(raw_text)
+        try:
+            data = json.loads(json_text)
+            if not isinstance(data, list):
+                data = [data]
+            return [ToolSpec.model_validate(item) for item in data]
+        except Exception as e:
+            if retry_context is None:
+                return await self._call_gemini(user_content, retry_context=f"Errors: {e}\nResponse: {raw_text}")
             return []
 
 
