@@ -286,6 +286,26 @@ def _form_csrf(spec: ToolSpec, rep: CapturedRequest) -> tuple[str | None, str | 
     return field, _templated_like(referer, spec, rep.url) if referer else None
 
 
+def _fixed_query(spec: ToolSpec, recorded: list[CapturedRequest]) -> str:
+    """Query-string values a write call always carried, like GitHub's ?queryId=.
+
+    request_mapping holds only body fields for POST/PUT/PATCH, so these would
+    otherwise be lost, and the server needs them to know what the call does.
+    """
+    if spec.method.upper() not in ("POST", "PUT", "PATCH") or "?" in spec.url_template:
+        return spec.url_template
+    queries = [dict(parse_qsl(urlparse(r.url).query, keep_blank_values=True)) for r in recorded]
+    if not queries:
+        return spec.url_template
+    fixed = {
+        k: v for k, v in queries[0].items()
+        if all(q.get(k) == v for q in queries[1:])
+        and k not in spec.request_mapping
+        and k.lower() not in CSRF_FIELD_NAMES
+    }
+    return f"{spec.url_template}?{urlencode(fixed)}" if fixed else spec.url_template
+
+
 def _endpoint_key(spec: ToolSpec) -> tuple[str, str]:
     """Same method and URL shape, whatever the placeholders are called."""
     return spec.method.upper(), re.sub(r"\{[^}]*\}", "{}", spec.url_template)
@@ -508,6 +528,10 @@ class ToolSpecBuilder:
                         spec.request_mapping.pop(spec.csrf_field, None)
                     host = (urlparse(rep.url).hostname or "").lower()
                     spec.headers = endpoint_headers(rep, host_headers.get(host, {}))
+                    recorded = [
+                        requests_map[rid] for rid in cluster.request_ids if rid in requests_map
+                    ]
+                    spec.url_template = _fixed_query(spec, recorded or [rep])
                 bodies = [
                     requests_map[rid].response_body
                     for rid in cluster.request_ids if rid in requests_map
