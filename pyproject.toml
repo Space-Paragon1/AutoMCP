@@ -26,6 +26,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Google Gemini for `automcp analyze` (has a free tier)
+gemini = ["google-genai>=2.0.0"]
 dev = [
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",
@@ -41,6 +43,8 @@ packages = ["apps", "core"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100

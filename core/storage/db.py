@@ -139,6 +139,9 @@ class AsyncDatabase:
             "ALTER TABLE tool_specs ADD COLUMN response_schema TEXT",
             "ALTER TABLE generated_tools ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE sessions ADD COLUMN project_id TEXT",
+            "ALTER TABLE captured_requests ADD COLUMN resource_type TEXT",
+            "ALTER TABLE tool_specs ADD COLUMN sample_url TEXT",
+            "ALTER TABLE tool_specs ADD COLUMN body_encoding TEXT NOT NULL DEFAULT 'json'",
         ]:
             try:
                 await self._conn.execute(stmt)
@@ -187,6 +190,14 @@ class AsyncDatabase:
         )
         await self.conn.commit()
 
+    async def update_session_auth(self, session_id: str, auth_state: dict) -> None:
+        """Replace the stored auth state (cookies, headers, storage) for a session."""
+        await self.conn.execute(
+            "UPDATE sessions SET browser_context_state = ? WHERE id = ?",
+            (json.dumps(auth_state), session_id),
+        )
+        await self.conn.commit()
+
     async def resolve_session_id(self, session_id: str) -> str | None:
         """Resolve a full or partial session ID to the full UUID."""
         async with self.conn.execute(
@@ -220,30 +231,39 @@ class AsyncDatabase:
     # Captured Requests
     # -------------------------------------------------------------------------
 
-    async def save_request(self, req: CapturedRequest) -> None:
-        await self.conn.execute(
-            """
-            INSERT OR REPLACE INTO captured_requests
-                (id, session_id, timestamp, method, url, request_headers,
-                 request_body, response_status, response_headers, response_body,
-                 action_label, dom_context)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                req.id,
-                req.session_id,
-                req.timestamp.isoformat(),
-                req.method,
-                req.url,
-                json.dumps(req.request_headers),
-                req.request_body,
-                req.response_status,
-                json.dumps(req.response_headers),
-                req.response_body,
-                req.action_label,
-                req.dom_context,
-            ),
+    _REQUEST_INSERT = """
+        INSERT OR REPLACE INTO captured_requests
+            (id, session_id, timestamp, method, url, request_headers,
+             request_body, response_status, response_headers, response_body,
+             action_label, dom_context, resource_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    @staticmethod
+    def _request_row(req: CapturedRequest) -> tuple:
+        return (
+            req.id,
+            req.session_id,
+            req.timestamp.isoformat(),
+            req.method,
+            req.url,
+            json.dumps(req.request_headers),
+            req.request_body,
+            req.response_status,
+            json.dumps(req.response_headers),
+            req.response_body,
+            req.action_label,
+            req.dom_context,
+            req.resource_type,
         )
+
+    async def save_request(self, req: CapturedRequest) -> None:
+        await self.conn.execute(self._REQUEST_INSERT, self._request_row(req))
+        await self.conn.commit()
+
+    async def save_requests(self, reqs: list[CapturedRequest]) -> None:
+        """Save many requests in a single transaction."""
+        await self.conn.executemany(self._REQUEST_INSERT, [self._request_row(r) for r in reqs])
         await self.conn.commit()
 
     async def get_requests_for_session(self, session_id: str) -> list[CapturedRequest]:
@@ -267,6 +287,7 @@ class AsyncDatabase:
                 response_body=row["response_body"],
                 action_label=row["action_label"],
                 dom_context=row["dom_context"],
+                resource_type=row["resource_type"],
             )
             for row in rows
         ]
@@ -284,8 +305,8 @@ class AsyncDatabase:
                 (spec_id, session_id, tool_name, purpose, method, url_template,
                  auth_strategy, csrf_strategy, inputs, request_mapping,
                  response_type, confidence, quality_score, created_at,
-                 approved, is_readonly, version, response_schema)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 approved, is_readonly, version, response_schema, sample_url, body_encoding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 spec.spec_id,
@@ -306,6 +327,8 @@ class AsyncDatabase:
                 int(spec.is_readonly),
                 spec.version,
                 response_schema_json,
+                spec.sample_url,
+                spec.body_encoding,
             ),
         )
         await self.conn.commit()
@@ -344,43 +367,7 @@ class AsyncDatabase:
         async with self.conn.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 
-        specs = []
-        for row in rows:
-            from core.storage.models import QualityScore, ToolInput
-
-            quality = None
-            if row["quality_score"]:
-                quality = QualityScore.model_validate_json(row["quality_score"])
-
-            inputs_raw = json.loads(row["inputs"])
-            inputs = [ToolInput.model_validate(i) for i in inputs_raw]
-
-            response_schema = None
-            if row["response_schema"]:
-                response_schema = json.loads(row["response_schema"])
-
-            specs.append(
-                ToolSpec(
-                    spec_id=row["spec_id"],
-                    session_id=row["session_id"],
-                    tool_name=row["tool_name"],
-                    purpose=row["purpose"],
-                    method=row["method"],
-                    url_template=row["url_template"],
-                    auth_strategy=row["auth_strategy"],
-                    csrf_strategy=row["csrf_strategy"],
-                    inputs=inputs,
-                    request_mapping=json.loads(row["request_mapping"]),
-                    response_type=row["response_type"],
-                    confidence=row["confidence"],
-                    quality_score=quality,
-                    created_at=datetime.fromisoformat(row["created_at"]),
-                    approved=bool(row["approved"]),
-                    is_readonly=bool(row["is_readonly"]),
-                    version=row["version"],
-                    response_schema=response_schema,
-                )
-            )
+        specs = [self._spec_from_row(row) for row in rows]
         return specs
 
     async def get_tool_spec(self, spec_id: str) -> ToolSpec | None:
@@ -390,15 +377,25 @@ class AsyncDatabase:
             row = await cursor.fetchone()
         if row is None:
             return None
+        return self._spec_from_row(row)
 
+    async def delete_unapproved_specs(self, session_id: str) -> int:
+        """Remove unreviewed specs for a session (used when re-running analyze)."""
+        cursor = await self.conn.execute(
+            "DELETE FROM tool_specs WHERE session_id = ? AND approved = 0", (session_id,)
+        )
+        await self.conn.commit()
+        return cursor.rowcount
+
+    @staticmethod
+    def _spec_from_row(row: aiosqlite.Row) -> ToolSpec:
         from core.storage.models import QualityScore, ToolInput
 
         quality = None
         if row["quality_score"]:
             quality = QualityScore.model_validate_json(row["quality_score"])
 
-        inputs_raw = json.loads(row["inputs"])
-        inputs = [ToolInput.model_validate(i) for i in inputs_raw]
+        inputs = [ToolInput.model_validate(i) for i in json.loads(row["inputs"])]
 
         response_schema = None
         if row["response_schema"]:
@@ -423,6 +420,8 @@ class AsyncDatabase:
             is_readonly=bool(row["is_readonly"]),
             version=row["version"],
             response_schema=response_schema,
+            sample_url=row["sample_url"],
+            body_encoding=row["body_encoding"] or "json",
         )
 
     # -------------------------------------------------------------------------
@@ -430,6 +429,8 @@ class AsyncDatabase:
     # -------------------------------------------------------------------------
 
     async def save_generated_tool(self, tool: GeneratedTool) -> None:
+        """Save a generated tool, replacing any earlier record for the same spec."""
+        await self.conn.execute("DELETE FROM generated_tools WHERE spec_id = ?", (tool.spec_id,))
         await self.conn.execute(
             """
             INSERT OR REPLACE INTO generated_tools
@@ -451,6 +452,7 @@ class AsyncDatabase:
 
     async def get_generated_tools(self, session_id: str | None = None) -> list[GeneratedTool]:
         if session_id is not None:
+            session_id = await self.resolve_session_id(session_id) or session_id
             query = """
                 SELECT gt.* FROM generated_tools gt
                 JOIN tool_specs ts ON gt.spec_id = ts.spec_id
@@ -655,16 +657,11 @@ class AsyncDatabase:
         ]
 
 
-# ---------------------------------------------------------------------------
-# Module-level singleton
-# ---------------------------------------------------------------------------
-
-_db_instance: AsyncDatabase | None = None
-
-
 def get_db() -> AsyncDatabase:
-    """Return the singleton AsyncDatabase instance."""
-    global _db_instance
-    if _db_instance is None:
-        _db_instance = AsyncDatabase()
-    return _db_instance
+    """Return a new database handle. Use it as `async with get_db() as db:`.
+
+    Each caller gets its own connection. A shared instance broke when two
+    callers overlapped (for example, the dashboard loading several panels at
+    once): one caller's exit closed the connection the other was still using.
+    """
+    return AsyncDatabase()

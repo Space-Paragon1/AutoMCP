@@ -5,10 +5,11 @@ from typing import Callable
 
 from rich.console import Console
 
-from core.storage.models import GeneratedTool, ToolSpec
 from core.runtime.tool_loader import ToolLoader
+from core.storage.models import GeneratedTool, ToolSpec
 
-console = Console()
+# stderr: the MCP stdio transport uses stdout
+console = Console(stderr=True)
 
 
 class ToolRegistry:
@@ -27,6 +28,9 @@ class ToolRegistry:
         """Remove a tool from the registry."""
         self._tools.pop(tool_name, None)
 
+    def names(self) -> list[str]:
+        return list(self._tools)
+
     def list_tools(self) -> list[ToolSpec]:
         """Return all registered tool specs (filters out None specs)."""
         return [spec for _, spec in self._tools.values() if spec is not None]
@@ -41,32 +45,37 @@ class ToolRegistry:
         entry = self._tools.get(tool_name)
         return entry[1] if entry else None
 
-    async def load_all(self, generated_tools: list[GeneratedTool]) -> int:
+    async def load_all(
+        self,
+        generated_tools: list[GeneratedTool],
+        specs: dict[str, ToolSpec] | None = None,
+    ) -> int:
         """
         Load all tools whose validation_status is "valid".
 
+        When two records share a tool name, the most recently generated wins.
         Returns the number of successfully loaded tools.
         """
-        loaded = 0
-        for tool_record in generated_tools:
-            if tool_record.validation_status != "valid":
+        specs = specs or {}
+        latest: dict[str, GeneratedTool] = {}
+        for record in sorted(generated_tools, key=lambda t: t.generated_at):
+            if record.validation_status != "valid":
                 console.print(
-                    f"[dim]Skipping {tool_record.tool_name} "
-                    f"(status: {tool_record.validation_status})[/]"
+                    f"[dim]Skipping {record.tool_name} (status: {record.validation_status})[/]"
                 )
                 continue
+            latest[record.tool_name] = record
 
+        loaded = 0
+        for tool_record in latest.values():
             file_path = Path(tool_record.file_path)
             if not file_path.exists():
-                console.print(
-                    f"[yellow]Warning:[/] Tool file not found: {file_path}"
-                )
+                console.print(f"[yellow]Warning:[/] Tool file not found: {file_path}")
                 continue
 
             try:
                 fn = self._loader.load_and_get(file_path, tool_record.tool_name)
-                # Spec is not available at this point; set to None
-                self._tools[tool_record.tool_name] = (fn, None)
+                self._tools[tool_record.tool_name] = (fn, specs.get(tool_record.spec_id))
                 loaded += 1
             except Exception as e:
                 console.print(

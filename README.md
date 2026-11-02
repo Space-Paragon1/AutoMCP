@@ -10,23 +10,32 @@
 automcp record  →  automcp analyze  →  automcp review  →  automcp generate  →  automcp serve
      │                   │                   │                   │                   │
   Playwright          Claude API         Approve /           Jinja2 →           FastMCP
-  captures            produces           rename /            .py files           SSE server
-  traffic             ToolSpec JSON      skip each           (AST validated)     on :8000
+  captures            produces           rename /            .py files           server (stdio
+  traffic             ToolSpec JSON      skip each           (AST validated)     or HTTP)
                       (not raw code)     spec
 ```
 
-All state persists to a local SQLite database. Nothing leaves your machine except the Anthropic API call during `analyze`.
+All state persists to a local SQLite database. Nothing leaves your machine except the LLM API call during `analyze`, and that call never includes cookie values, auth headers, passwords or tokens: they are redacted first.
+
+Served tools reuse the login you recorded: each call sends the cookies and auth/CSRF headers the browser used for that host, so the AI never sees or handles credentials.
 
 ---
 
 ## Installation
 
+Requires Python 3.11+ (macOS ships 3.9, so use Homebrew's `python3.12` or similar).
+
 ```bash
-pip install -e .
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
 playwright install chromium
 cp .env.example .env
 # Edit .env — set AUTOMCP_ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+**No Anthropic credits?** Google Gemini has a free tier. Install `pip install -e ".[gemini]"`, get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), and set `AUTOMCP_LLM_PROVIDER=gemini`, `AUTOMCP_GEMINI_API_KEY=...` and `AUTOMCP_LLM_MODEL=gemini-flash-latest` in `.env`. Google may use free-tier requests to improve its products, and `analyze` sends recorded traffic (with secrets removed), so avoid recording private sites on the free tier.
+
+Run the tests with `pytest`.
 
 ---
 
@@ -40,7 +49,7 @@ automcp record https://app.example.com --project myapp
 automcp record https://app.example.com --headless
 ```
 
-A Chromium window opens. Log in, click around, perform the actions you want to automate. Close the browser window when done. AutoMCP saves every HTTP request/response plus cookies and DOM snapshots to SQLite.
+A Chromium window opens. Log in, click around, perform the actions you want to automate. Close the browser window (or press Ctrl+C) when done. AutoMCP saves every HTTP request/response plus your login state (cookies, auth headers, localStorage tokens) to SQLite. Login state is snapshotted every few seconds while you record, so it's kept even if the browser is closed abruptly.
 
 Session IDs are printed after recording. Use the first 8 characters as a shorthand in all subsequent commands.
 
@@ -60,9 +69,12 @@ automcp sessions
 automcp analyze <session_id>
 automcp analyze <session_id> --min-confidence 0.7
 automcp analyze <session_id> --output my_specs.json
+automcp analyze <session_id> --include-pages   # also use HTML page loads
 ```
 
-Filters out noise (analytics, redirects, errors), clusters endpoints by URL pattern, then calls Claude to produce structured `ToolSpec` JSON for each endpoint — not raw code. Specs are saved to `generated/specs/` and the database.
+Filters out noise (analytics, trackers, static assets, page loads, redirects, errors), clusters endpoints by URL pattern, then calls Claude to produce structured `ToolSpec` JSON for each endpoint — not raw code. Endpoints are sent in batches, so large sessions work. Specs are saved to `generated/specs/` and the database.
+
+`--include-pages` keeps full HTML page loads, for server-rendered sites that don't have a JSON API. Re-running `analyze` replaces specs you haven't reviewed yet and keeps the ones you approved.
 
 ---
 
@@ -89,36 +101,28 @@ automcp generate <session_id>
 automcp generate <session_id> --output-dir ./my_tools
 ```
 
-Renders a Jinja2 template for each approved spec, producing a standalone async Python file in `generated/tools/`. Each file is validated with AST analysis (no `exec()`).
+Renders a Jinja2 template for each approved spec, producing a small async Python file in `generated/tools/`. The file declares the tool's inputs and calls the shared runtime (`core/runtime/executor.py`), which builds the request, adds your recorded login, retries, rate-limits and logs each call. Every value from the spec is written as a quoted literal, so spec text can never become code, and each file is checked with AST analysis (no `exec()`, only expected imports).
 
 ---
 
 ### `serve` — Start the MCP server
 
 ```bash
-automcp serve
+automcp serve                      # Streamable HTTP at http://127.0.0.1:8000/mcp
 automcp serve --port 9000
+automcp serve --transport stdio    # for Claude Desktop / Claude Code
+automcp serve --transport sse      # legacy SSE at /sse
 ```
 
-Loads all validated tool files via `importlib` and registers them with a FastMCP server. The MCP endpoint is:
+Loads all validated tool files via `importlib` and registers them with a FastMCP server. Tools are marked read-only (GET, or marked `readonly` in review) or destructive (DELETE) so MCP clients can ask before risky actions. Every call is logged (see `automcp logs`).
 
-```
-http://127.0.0.1:8000/sse
-```
+**Connecting Claude Desktop or Claude Code:** run
 
-**Connecting Claude Desktop:** add this to `%APPDATA%\Claude\claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "automcp": {
-      "url": "http://127.0.0.1:8000/sse"
-    }
-  }
-}
+```bash
+automcp mcp-config
 ```
 
-Restart Claude Desktop after editing the config. Keep `automcp serve` running in a terminal.
+It prints a ready-to-paste `claude_desktop_config.json` entry (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`) and the `claude mcp add` command for Claude Code. Both launch `automcp serve --transport stdio` themselves, with `AUTOMCP_HOME` pointing at this folder so the database and tools are found from any directory. Restart Claude Desktop after editing the config.
 
 ---
 
@@ -128,7 +132,7 @@ Restart Claude Desktop after editing the config. Keep `automcp serve` running in
 automcp test <tool_name>
 ```
 
-Prompts for inputs, executes the tool against the live site using recorded auth cookies, and prints the response. Execution is logged to the database.
+Prompts for inputs, executes the tool against the live site using your recorded login, and prints the response. Execution is logged to the database.
 
 ---
 
@@ -190,21 +194,23 @@ automcp auth-check <session_id> --probe https://trello.com/1/members/me
 ```bash
 automcp auth-refresh <session_id>
 ```
-Re-opens the browser so you can log in again. Updates the stored cookies without losing your generated tools.
+Re-opens the browser so you can log in again, then updates that session's stored login. Running tools (including a live `automcp serve`) pick up the new login within 30 seconds; nothing needs regenerating.
 
 ### Check for API drift
 ```bash
 automcp drift-check <session_id>
 ```
-Makes live requests to each recorded GET endpoint and compares the response schema to what was recorded. Flags any endpoints where the API has changed.
+Replays the recorded request for each approved GET endpoint and compares the response schema to what was recorded. Flags any endpoints where the API has changed.
 
 ## Multi-model support
 
 ```bash
-automcp analyze <session_id>                          # default: Anthropic
+automcp analyze <session_id>                          # uses AUTOMCP_LLM_PROVIDER (default: anthropic)
 automcp analyze <session_id> --provider openai        # requires AUTOMCP_OPENAI_API_KEY
-automcp analyze <session_id> --provider gemini        # requires AUTOMCP_GEMINI_API_KEY
+automcp analyze <session_id> --provider gemini        # requires AUTOMCP_GEMINI_API_KEY and pip install -e ".[gemini]"
 ```
+
+If `AUTOMCP_LLM_MODEL` isn't a model for the chosen provider, OpenAI falls back to `gpt-4o` and Gemini to `gemini-flash-latest`. Gemini requests retry automatically when the free tier's per-minute limit is hit.
 
 ---
 
@@ -214,10 +220,12 @@ automcp analyze <session_id> --provider gemini        # requires AUTOMCP_GEMINI_
 core/
   recorder/       Playwright session, network capture, DOM snapshot, action mapper
   analyzer/       Event classifier, endpoint clusterer, LLM spec builder
-  auth/           Cookies, CSRF, headers, localStorage/sessionStorage, vault
+  auth/           Cookies, CSRF, headers, login replay, localStorage/sessionStorage, vault
   codegen/        Jinja2 generator, AST validator, templates/
-  runtime/        importlib tool loader, registry, FastMCP server
+  runtime/        Request executor, retry/rate limiting, importlib loader, FastMCP server
   storage/        Pydantic v2 models, aiosqlite database
+
+tests/            pytest suite (analysis, codegen safety, runtime, dashboard)
 
 apps/
   cli/            Typer CLI (record, analyze, review, generate, serve, test, ui, ...)
@@ -232,6 +240,7 @@ generated/
 - Claude produces structured JSON specs only — never raw code
 - Code is generated from Jinja2 templates deterministically
 - No `exec()` — tools load via `importlib.util`
+- Generated tools are thin; request logic lives in one shared runtime, so fixes apply without regenerating
 - Auth is a pluggable strategy engine (cookies, bearer, API key, CSRF)
 - Tool quality scoring: usefulness × stability × side-effect risk
 
@@ -241,8 +250,13 @@ generated/
 
 | Variable | Default | Description |
 |---|---|---|
-| `AUTOMCP_ANTHROPIC_API_KEY` | *(required)* | Anthropic API key |
-| `AUTOMCP_LLM_MODEL` | `claude-opus-4-5` | Claude model for analysis |
+| `AUTOMCP_HOME` | current directory | Folder holding `.env`, the database and generated files |
+| `AUTOMCP_LLM_PROVIDER` | `anthropic` | AI used by `analyze`: `anthropic`, `openai` or `gemini` |
+| `AUTOMCP_ANTHROPIC_API_KEY` | *(required for Anthropic)* | Anthropic API key |
+| `AUTOMCP_GEMINI_API_KEY` | *(required for Gemini)* | Google AI Studio API key |
+| `AUTOMCP_LLM_MODEL` | `claude-opus-5-5` | Model for analysis |
+| `AUTOMCP_ANALYZE_BATCH_SIZE` | `12` | Endpoints sent to the LLM per request |
+| `AUTOMCP_RATE_LIMIT_PER_MINUTE` | `60` | Max tool calls per minute (shared) |
 | `AUTOMCP_DB_PATH` | `automcp.db` | SQLite database path |
 | `AUTOMCP_SERVER_HOST` | `127.0.0.1` | MCP server host |
 | `AUTOMCP_SERVER_PORT` | `8000` | MCP server port |
