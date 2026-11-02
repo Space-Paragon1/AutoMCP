@@ -11,9 +11,10 @@ UUID_PATTERN = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I
 )
 INTEGER_PATTERN = re.compile(r'^\d+$')
-HEX_PATTERN = re.compile(r'^[0-9a-f]{8,}$', re.I)
-# Base58-like: alphanumeric, no 0/O/I/l ambiguous chars, >= 20 chars
-BASE58_PATTERN = re.compile(r'^[A-HJ-NP-Za-km-z1-9]{20,}$')
+# Hex IDs (e.g. Mongo/Trello ObjectIds). Must contain a digit so plain words don't match.
+HEX_PATTERN = re.compile(r'^(?=.*\d)[0-9a-f]{8,}$', re.I)
+# Base58/base62-style IDs: long, and a mix of letters and digits
+BASE58_PATTERN = re.compile(r'^(?=.*\d)(?=.*[A-Za-z])[A-HJ-NP-Za-km-z1-9]{20,}$')
 
 
 def _is_id_like(segment: str) -> bool:
@@ -25,23 +26,36 @@ def _is_id_like(segment: str) -> bool:
     )
 
 
+def _singular(word: str) -> str:
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"
+    if word.endswith(("sses", "xes", "ches", "shes")):
+        return word[:-2]
+    if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+        return word[:-1]
+    return word
+
+
 def _normalise_path(path: str) -> str:
-    """Replace dynamic ID segments with {id} placeholders."""
-    parts = path.strip("/").split("/")
+    """Replace dynamic ID segments with named placeholders like {board_id}."""
+    parts = [p for p in path.strip("/").split("/") if p]
     normalised: list[str] = []
+    used: set[str] = set()
     for i, part in enumerate(parts):
-        if not part:
-            continue
-        if _is_id_like(part):
-            # Try to derive a name from the preceding segment
-            if normalised:
-                prev = normalised[-1].rstrip("s")  # simple singularise
-                placeholder = f"{{{prev}_id}}"
-            else:
-                placeholder = "{id}"
-            normalised.append(placeholder)
-        else:
+        # A short number at the start is an API version (Trello's /1/...), not an ID
+        is_version = i == 0 and part.isdigit() and len(part) <= 2
+        if is_version or not _is_id_like(part):
             normalised.append(part)
+            continue
+        # Name the placeholder after the preceding literal segment (/boards/123 -> board_id)
+        prev = parts[i - 1] if i > 0 and not normalised[-1].startswith("{") else ""
+        stem = re.sub(r"[^a-z0-9]+", "_", _singular(prev.lower())).strip("_")
+        name = f"{stem}_id" if stem and not stem[0].isdigit() else "id"
+        unique, n = name, 2
+        while unique in used:
+            unique, n = f"{name}_{n}", n + 1
+        used.add(unique)
+        normalised.append("{" + unique + "}")
     return "/" + "/".join(normalised)
 
 

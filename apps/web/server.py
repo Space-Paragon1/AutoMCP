@@ -1,20 +1,20 @@
 """AutoMCP 2.0 Web Dashboard."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from core.codegen.naming import is_safe_identifier, to_snake_case
 from core.config import settings
 from core.storage.db import get_db
 
 BASE_DIR = Path(__file__).parent
 
-app_web = FastAPI(title="AutoMCP 2.0 Dashboard")
+app_web = FastAPI(title="AutoMCP Dashboard")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
@@ -80,6 +80,8 @@ async def api_update_spec(spec_id: str, request: Request):
     updates = {k: v for k, v in body.items() if k in allowed}
     if not updates:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+    if "tool_name" in updates:
+        updates["tool_name"] = to_snake_case(str(updates["tool_name"]))
     db = get_db()
     async with db:
         await db.update_tool_spec(spec_id, **updates)
@@ -96,6 +98,8 @@ async def api_tools():
 
 @app_web.get("/api/tools/{tool_name}/source")
 async def api_tool_source(tool_name: str):
+    if not is_safe_identifier(tool_name):
+        raise HTTPException(status_code=400, detail="Invalid tool name")
     path = Path(settings.generated_tools_dir) / f"{tool_name}.py"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Tool file not found")

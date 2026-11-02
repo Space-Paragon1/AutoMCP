@@ -31,17 +31,46 @@ class RetryConfig:
 class RateLimiter:
     calls_per_minute: int = 60
     _timestamps: deque = field(default_factory=deque)
+    _lock: asyncio.Lock | None = None
+    _lock_loop: asyncio.AbstractEventLoop | None = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        # asyncio locks belong to one event loop; make a new one if the loop changed
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not loop:
+            self._lock, self._lock_loop = asyncio.Lock(), loop
+        return self._lock
 
     async def acquire(self) -> None:
-        now = time.monotonic()
-        # Drop timestamps older than 60 seconds
-        while self._timestamps and now - self._timestamps[0] > 60.0:
-            self._timestamps.popleft()
-        if len(self._timestamps) >= self.calls_per_minute:
-            wait = 60.0 - (now - self._timestamps[0])
-            if wait > 0:
-                await asyncio.sleep(wait)
-        self._timestamps.append(time.monotonic())
+        # The lock stops concurrent callers from all passing the check at once
+        async with self._get_lock():
+            now = time.monotonic()
+            # Drop timestamps older than 60 seconds
+            while self._timestamps and now - self._timestamps[0] > 60.0:
+                self._timestamps.popleft()
+            if len(self._timestamps) >= self.calls_per_minute:
+                wait = 60.0 - (now - self._timestamps[0])
+                if wait > 0:
+                    await asyncio.sleep(wait)
+            self._timestamps.append(time.monotonic())
+
+
+def _retry_after_seconds(response: httpx.Response, default: float) -> float:
+    """Parse Retry-After, which may be a number of seconds or an HTTP date."""
+    value = response.headers.get("retry-after")
+    if not value:
+        return default
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+        when = parsedate_to_datetime(value)
+        return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError):
+        return default
 
 
 async def with_retry(
@@ -57,9 +86,9 @@ async def with_retry(
             return await fn()
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
-            if status == 429:
+            if status == 429 and attempt < cfg.max_attempts - 1:
                 # Respect Retry-After header if present
-                retry_after = float(e.response.headers.get("retry-after", cfg.base_delay))
+                retry_after = _retry_after_seconds(e.response, cfg.base_delay)
                 await asyncio.sleep(min(retry_after, cfg.max_delay))
             elif status in cfg.retryable_statuses and attempt < cfg.max_attempts - 1:
                 delay = min(cfg.base_delay * (cfg.backoff_factor ** attempt), cfg.max_delay)
