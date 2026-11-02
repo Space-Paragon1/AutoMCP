@@ -189,3 +189,67 @@ async def test_expired_login_gives_clear_error():
     fn = ToolLoader().load_and_get(__import__("pathlib").Path(tool.file_path), "get_board")
     with pytest.raises(ToolError, match=f"auth-refresh {session.id[:8]}"):
         await fn(board_id="1")
+
+
+# ---------------------------------------------------------------- real-site fixes (GitHub)
+
+async def test_dotted_fields_become_a_nested_json_body():
+    seen = []
+
+    def api(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True})
+
+    executor._transport = httpx.MockTransport(api)
+    spec = {"tool_name": "create_issue", "method": "POST", "session_id": None,
+            "url_template": "https://x.com/_ghui/issues", "response_type": "json",
+            "request_mapping": {"input.title": "$input.title", "input.isDuplicated": False,
+                                "fetchParent": False}}
+    await executor.execute(spec, {"title": "Bug"})
+    assert seen == [{"input": {"title": "Bug", "isDuplicated": False}, "fetchParent": False}]
+
+
+async def test_form_posts_read_a_fresh_token_from_the_forms_page():
+    """Like GitHub's star button: each form on the page has its own token."""
+    page = (
+        '<html><meta name="csrf-token" content="page-wide">'
+        '<form action="/me/Alpha/star" method="post">'
+        '<input type="hidden" name="authenticity_token" value="tok-alpha"></form>'
+        '<form action="https://x.com/me/Beta/star" method="post">'
+        '<input type="hidden" name="authenticity_token" value="tok-beta"></form></html>'
+    )
+    posted = []
+
+    def site(request):
+        if request.method == "GET":
+            assert "x-requested-with" not in request.headers  # A plain page load
+            return httpx.Response(200, text=page, headers={"content-type": "text/html"})
+        posted.append((request.url.path, request.headers["content-type"], request.content))
+        return httpx.Response(200, json={"starred": True})
+
+    executor._transport = httpx.MockTransport(site)
+    spec = {"tool_name": "star_repo", "method": "POST", "session_id": None,
+            "url_template": "https://x.com/me/{name}/star", "response_type": "json",
+            "body_encoding": "multipart", "request_mapping": {"context": "other"},
+            "headers": {"x-requested-with": "XMLHttpRequest"},
+            "csrf_field": "authenticity_token", "csrf_page": "https://x.com/me?tab=repositories"}
+    assert await executor.execute(spec, {"name": "Beta"}) == {"starred": True}
+
+    path, content_type, body = posted[0]
+    assert path == "/me/Beta/star" and content_type.startswith("multipart/form-data")
+    assert b'name="authenticity_token"\r\n\r\ntok-beta' in body  # Beta's own token
+    assert b'name="context"\r\n\r\nother' in body
+
+
+def test_analysis_finds_the_form_token_field_and_page():
+    from core.analyzer.tool_spec_builder import _form_csrf
+
+    spec = ToolSpec(tool_name="star_repo", purpose="p", method="POST", auth_strategy="cookies",
+                    url_template="https://x.com/me/{name}/star", body_encoding="multipart")
+    rep = CapturedRequest(
+        session_id="s", method="POST", url="https://x.com/me/Alpha/star", response_status=200,
+        request_headers={"referer": "https://x.com/me/Alpha?tab=code"},
+        request_body=('--b\r\nContent-Disposition: form-data; name="authenticity_token"\r\n\r\nT\r\n'
+                      '--b\r\nContent-Disposition: form-data; name="context"\r\n\r\nother\r\n--b--'),
+    )
+    assert _form_csrf(spec, rep) == ("authenticity_token", "https://x.com/me/{name}?tab=code")
