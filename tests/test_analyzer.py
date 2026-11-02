@@ -454,6 +454,35 @@ async def test_specs_keep_endpoint_headers_and_drop_duplicates():
     assert specs[0].headers == {"origin": "https://github.com", "github-verified-fetch": "true"}
 
 
+async def test_write_calls_keep_query_values_the_browser_always_sent():
+    # GitHub runs saved GraphQL queries by ID: the ID sits in the query string of a POST
+    create = [
+        _req("https://github.com/_ghui/issues?queryId=abc123&n=" + str(i), method="POST",
+             request_body=json.dumps({"input": {"title": f"t{i}"}}))
+        for i in range(2)
+    ]
+    search = _req("https://x.com/api/search?queryId=q1&term=cats")
+    reqs = create + [search]
+    clusters = EndpointClusterer().cluster(reqs)
+
+    def respond(cs):
+        # The model maps body fields only, and for a GET maps term but not queryId
+        return json.dumps({"specs": [
+            {**_spec_for(c), "request_mapping": (
+                {"input.title": "$input.title"} if c["method"] == "POST"
+                else {"term": "$input.term"})} for c in cs
+        ]}), "end_turn"
+
+    specs = await ToolSpecBuilder(client=FakeAnthropic(respond)).build_specs(
+        clusters, {r.id: r for r in reqs}, "s"
+    )
+    by_method = {s.method: s for s in specs}
+    # Same in every recorded call: kept. Different each time (n): left out
+    assert by_method["POST"].url_template == "https://github.com/_ghui/issues?queryId=abc123"
+    # GET query fields are the model's job (request_mapping), so its URL is untouched
+    assert "?" not in by_method["GET"].url_template
+
+
 def test_placeholders_are_named_after_plural_collections():
     reqs = [_req(f"https://x.com/repos/{r}/star", method="POST") for r in ("Alpha1", "Beta2")]
     assert [c.url_template for c in EndpointClusterer().cluster(reqs)] == ["https://x.com/repos/{repo}/star"]
