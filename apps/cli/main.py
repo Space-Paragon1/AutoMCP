@@ -628,8 +628,13 @@ async def _auth_check(session_id: str, probe_url: str | None) -> None:
     if not health.is_valid:
         console.print(
             f"\n[yellow]Credentials appear expired.[/] "
-            f"Refresh with: [bold]automcp auth-refresh {full_id[:8]}[/]"
+            f"Log in again with: [bold]automcp auth-refresh {full_id[:8]}[/]"
         )
+        if not state.get("login"):
+            console.print(
+                f"To renew by itself next time, save the password with: "
+                f"[bold]automcp auth-login {full_id[:8]}[/]"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -640,15 +645,19 @@ async def _auth_check(session_id: str, probe_url: str | None) -> None:
 @app.command()
 def auth_refresh(
     session_id: str = typer.Argument(..., help="Session ID to refresh auth for"),
+    auto: bool = typer.Option(
+        False, "--auto",
+        help="Renew in a hidden browser without you (what tools do by themselves on HTTP 401)",
+    ),
 ):
     """Re-open the browser to refresh expired auth credentials."""
     try:
-        asyncio.run(_auth_refresh(session_id))
+        asyncio.run(_auth_refresh(session_id, auto))
     except KeyboardInterrupt:
         pass
 
 
-async def _auth_refresh(session_id: str) -> None:
+async def _auth_refresh(session_id: str, auto: bool = False) -> None:
     from core.recorder.browser_session import BrowserSession
     from core.storage.db import get_db
 
@@ -659,6 +668,10 @@ async def _auth_refresh(session_id: str) -> None:
     if session is None:
         console.print(f"[red]Session not found:[/] {session_id}")
         raise typer.Exit(1)
+
+    if auto:
+        await _renew_and_check(full_id)
+        return
 
     console.print(Panel(
         f"[bold]Refreshing auth for session[/] [cyan]{full_id[:8]}[/]\n"
@@ -674,6 +687,110 @@ async def _auth_refresh(session_id: str) -> None:
         pass  # Ctrl+C: the fresh auth state has still been saved
 
     console.print("Generated tools use the new login automatically (within 30 seconds).")
+
+
+async def _renew_and_check(full_id: str) -> None:
+    """Run the background login renewal now, then probe whether it worked."""
+    from core.auth.relogin import renew_login
+
+    with console.status("[bold green]Renewing the login in a hidden browser...[/]"):
+        renewed = await renew_login(full_id, force=True)
+    if not renewed:
+        console.print("[red]Renewal failed.[/] Log in yourself with "
+                      f"[bold]automcp auth-refresh {full_id[:8]}[/]")
+        raise typer.Exit(1)
+    console.print("[dim]Hidden browser finished. Checking the login...[/]")
+    await _auth_check(full_id, None)
+
+
+# ---------------------------------------------------------------------------
+# auth-login
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def auth_login(
+    session_id: str = typer.Argument(..., help="Session to save a login for"),
+    login_url: str = typer.Option(
+        None, "--login-url", help="Page with the login form (default: the recorded URL)"
+    ),
+    username: str = typer.Option(None, "--username", "-u", help="Username or email"),
+    username_selector: str = typer.Option(
+        None, "--username-selector", help="CSS selector for the username field, if not found"
+    ),
+    password_selector: str = typer.Option(
+        None, "--password-selector", help="CSS selector for the password field, if not found"
+    ),
+    clear: bool = typer.Option(False, "--clear", help="Forget the saved login"),
+):
+    """Save a username and password so expired logins renew by themselves.
+
+    The password is stored encrypted in the local vault. When a tool gets
+    HTTP 401, AutoMCP fills in the site's login form in a hidden browser and
+    retries. Logins with one-time codes or captchas can't be automated; use
+    auth-refresh for those.
+    """
+    asyncio.run(_auth_login(
+        session_id, login_url, username, username_selector, password_selector, clear
+    ))
+
+
+async def _auth_login(
+    session_id: str,
+    login_url: str | None,
+    username: str | None,
+    username_selector: str | None,
+    password_selector: str | None,
+    clear: bool,
+) -> None:
+    from rich.prompt import Prompt
+
+    from core.auth.relogin import login_secret_names
+    from core.auth.vault import get_vault
+    from core.storage.db import get_db
+
+    async with get_db() as db:
+        full_id = await db.resolve_session_id(session_id) or session_id
+        session = await db.get_session(full_id)
+    if session is None:
+        console.print(f"[red]Session not found:[/] {session_id}")
+        raise typer.Exit(1)
+
+    state = dict(session.browser_context_state or {})
+    user_key, pass_key = login_secret_names(full_id)
+    vault = get_vault()
+
+    if clear:
+        state.pop("login", None)
+        vault.delete(user_key)
+        vault.delete(pass_key)
+        async with get_db() as db:
+            await db.update_session_auth(full_id, state)
+        console.print(f"[green]Forgot the saved login for session[/] [cyan]{full_id[:8]}[/]")
+        return
+
+    username = username or Prompt.ask("Username or email (Enter if the form has none)", default="")
+    password = Prompt.ask("Password", password=True)
+    if not password:
+        console.print("[red]A password is required.[/]")
+        raise typer.Exit(1)
+
+    vault.set(pass_key, password)
+    if username:
+        vault.set(user_key, username)
+    else:
+        vault.delete(user_key)
+    state["login"] = {
+        "url": login_url or session.url,
+        "username_secret": user_key if username else None,
+        "password_secret": pass_key,
+        "username_selector": username_selector,
+        "password_selector": password_selector,
+    }
+    async with get_db() as db:
+        await db.update_session_auth(full_id, state)
+    console.print("[green]Login saved[/] (password encrypted in the local vault). Trying it now...")
+    await _renew_and_check(full_id)
 
 
 # ---------------------------------------------------------------------------
