@@ -1,6 +1,6 @@
 # AutoMCP 2.0
 
-**AutoMCP 2.0** turns browser sessions into MCP tools. Record a session on any web app, let Claude analyze the traffic, review the generated specs, and serve them as production-ready [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) tools — no API docs, no SDKs required.
+**AutoMCP 2.0** turns browser sessions into MCP tools. Record a session on any web app, let an AI (Claude, Gemini or OpenAI) analyze the traffic, review the generated specs, and serve them as production-ready [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) tools — no API docs, no SDKs required.
 
 ---
 
@@ -9,7 +9,7 @@
 ```
 automcp record  →  automcp analyze  →  automcp review  →  automcp generate  →  automcp serve
      │                   │                   │                   │                   │
-  Playwright          Claude API         Approve /           Jinja2 →           FastMCP
+  Playwright          LLM API            Approve /           Jinja2 →           FastMCP
   captures            produces           rename /            .py files           server (stdio
   traffic             ToolSpec JSON      skip each           (AST validated)     or HTTP)
                       (not raw code)     spec
@@ -39,6 +39,21 @@ Run the tests with `pytest`.
 
 ---
 
+## Quick start: your first tool
+
+This walkthrough uses [pokeapi.co](https://pokeapi.co), a public site with no login, so nothing private is sent to the AI. Run each command in a terminal opened in this folder, after `source .venv/bin/activate`.
+
+1. **Record.** Run `automcp record https://pokeapi.co`. A browser window opens. In the "Try it now" box, type `pokemon/ditto` and click **Submit**. Repeat with `pokemon/pikachu` and `type/3`, then close the browser window. The terminal prints a short session ID, such as `1a2b3c4d`.
+2. **Analyze.** Run `automcp analyze <session_id>`. The AI turns the recorded requests into tool specs. On Gemini's free tier this can take a few minutes.
+3. **Review.** Run `automcp review <session_id>` and answer `approve` for the specs you want.
+4. **Generate.** Run `automcp generate <session_id>`. This writes the tool files to `generated/tools/`.
+5. **Try a tool.** Run `automcp test <tool_name>` with a name from step 4. It asks for inputs and shows the site's response.
+6. **Use it from Claude.** Run `automcp mcp-config` and follow the printed instructions.
+
+If `analyze` reports "No useful requests remain after filtering", the site didn't make any API calls while you recorded. Record again and use the site more, or add `--include-pages` for sites that load whole pages instead of calling an API.
+
+---
+
 ## Full command reference
 
 ### `record` — Capture browser traffic
@@ -63,7 +78,7 @@ automcp sessions
 
 ---
 
-### `analyze` — Generate tool specs with Claude
+### `analyze` — Generate tool specs with an LLM
 
 ```bash
 automcp analyze <session_id>
@@ -72,7 +87,7 @@ automcp analyze <session_id> --output my_specs.json
 automcp analyze <session_id> --include-pages   # also use HTML page loads
 ```
 
-Filters out noise (analytics, trackers, static assets, page loads, redirects, errors), clusters endpoints by URL pattern, then calls Claude to produce structured `ToolSpec` JSON for each endpoint — not raw code. Endpoints are sent in batches, so large sessions work. Specs are saved to `generated/specs/` and the database.
+Filters out noise (analytics, trackers, static assets, page loads, redirects, errors), clusters endpoints by URL pattern, then calls the LLM (Claude, Gemini or OpenAI; see [Multi-model support](#multi-model-support)) to produce structured `ToolSpec` JSON for each endpoint — not raw code. Endpoints are sent in batches, so large sessions work. Specs are saved to `generated/specs/` and the database.
 
 `--include-pages` keeps full HTML page loads, for server-rendered sites that don't have a JSON API. Re-running `analyze` replaces specs you haven't reviewed yet and keeps the ones you approved.
 
@@ -206,7 +221,7 @@ Replays the recorded request for each approved GET endpoint and compares the res
 
 ```bash
 automcp analyze <session_id>                          # uses AUTOMCP_LLM_PROVIDER (default: anthropic)
-automcp analyze <session_id> --provider openai        # requires AUTOMCP_OPENAI_API_KEY
+automcp analyze <session_id> --provider openai        # requires AUTOMCP_OPENAI_API_KEY and pip install openai
 automcp analyze <session_id> --provider gemini        # requires AUTOMCP_GEMINI_API_KEY and pip install -e ".[gemini]"
 ```
 
@@ -237,7 +252,7 @@ generated/
 ```
 
 **Key design decisions:**
-- Claude produces structured JSON specs only — never raw code
+- The LLM produces structured JSON specs only — never raw code
 - Code is generated from Jinja2 templates deterministically
 - No `exec()` — tools load via `importlib.util`
 - Generated tools are thin; request logic lives in one shared runtime, so fixes apply without regenerating
@@ -254,6 +269,7 @@ generated/
 | `AUTOMCP_LLM_PROVIDER` | `anthropic` | AI used by `analyze`: `anthropic`, `openai` or `gemini` |
 | `AUTOMCP_ANTHROPIC_API_KEY` | *(required for Anthropic)* | Anthropic API key |
 | `AUTOMCP_GEMINI_API_KEY` | *(required for Gemini)* | Google AI Studio API key |
+| `AUTOMCP_OPENAI_API_KEY` | *(required for OpenAI)* | OpenAI API key |
 | `AUTOMCP_LLM_MODEL` | `claude-opus-5-5` | Model for analysis |
 | `AUTOMCP_ANALYZE_BATCH_SIZE` | `12` | Endpoints sent to the LLM per request |
 | `AUTOMCP_RATE_LIMIT_PER_MINUTE` | `60` | Max tool calls per minute (shared) |
