@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from urllib.parse import urlparse
 
 from core.storage.models import CapturedRequest, EndpointCluster
@@ -65,10 +66,65 @@ def _extract_base_url(url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def _cluster_key(method: str, url: str) -> str:
-    parsed = urlparse(url)
-    normalised_path = _normalise_path(parsed.path)
-    return f"{method.upper()}:{normalised_path}"
+# (method, scheme://host, path segments)
+ClusterKey = tuple[str, str, tuple[str, ...]]
+
+
+def _cluster_key(method: str, url: str) -> ClusterKey:
+    segments = tuple(p for p in _normalise_path(urlparse(url).path).split("/") if p)
+    return method.upper(), _extract_base_url(url), segments
+
+
+def _looks_like_name(segment: str) -> bool:
+    """Names (AutoMCP, Resume-Analyzer, team42) rather than route words
+    (issues, branch-infobar) or API versions (v2)."""
+    if re.fullmatch(r"v\d+(\.\d+)*", segment, re.I):
+        return False
+    return bool(re.search(r"[A-Z0-9]", segment))
+
+
+def _merge_variable_segments(
+    groups: dict[ClusterKey, list[CapturedRequest]],
+) -> dict[ClusterKey, list[CapturedRequest]]:
+    """Turn path segments that vary between otherwise identical URLs into placeholders.
+
+    IDs are caught by _normalise_path, but names aren't: /me/AutoMCP/star and
+    /me/Other-Repo/star are one "star a repo" endpoint. A segment counts as
+    variable when it sits between identical parts with different values: two
+    or more names/slugs, or four or more plain words. The last segment is never
+    merged, since /pull/2/files and /pull/2/commits are different endpoints.
+    """
+    while True:
+        buckets: dict[tuple, list[ClusterKey]] = defaultdict(list)
+        for key in groups:
+            method, base, segs = key
+            for pos in range(len(segs) - 1):
+                if not segs[pos].startswith("{"):
+                    buckets[(method, base, segs[:pos], segs[pos + 1:])].append(key)
+
+        merged_any = False
+        for (method, base, prefix, suffix), keys in buckets.items():
+            values = {key[2][len(prefix)] for key in keys}
+            if len(values) < 2:
+                continue
+            if len(values) < 4 and not all(_looks_like_name(v) for v in values):
+                continue
+            # Name it after a plural collection before it (/repos/{repo}), else {name}
+            prev = prefix[-1] if prefix else ""
+            is_collection = prev.endswith("s") and prev.isalpha() and prev.islower()
+            stem = prev if is_collection else ""
+            name = re.sub(r"[^a-z0-9]+", "_", _singular(stem.lower())).strip("_") or "name"
+            taken = {seg.strip("{}") for seg in prefix + suffix if seg.startswith("{")}
+            unique, n = name, 2
+            while unique in taken:
+                unique, n = f"{name}_{n}", n + 1
+            new_key = (method, base, prefix + ("{" + unique + "}",) + suffix)
+            merged = [req for key in keys for req in groups.pop(key)]
+            groups.setdefault(new_key, []).extend(merged)
+            merged_any = True
+            break  # Keys changed; rebuild the buckets
+        if not merged_any:
+            return groups
 
 
 def _infer_body_schema(requests: list[CapturedRequest]) -> dict | None:
@@ -114,21 +170,16 @@ class EndpointClusterer:
         Group requests into endpoint clusters.
         Returns one EndpointCluster per unique (method, url_template) combination.
         """
-        groups: dict[str, list[CapturedRequest]] = {}
+        groups: dict[ClusterKey, list[CapturedRequest]] = {}
 
         for req in requests:
             key = _cluster_key(req.method, req.url)
             groups.setdefault(key, []).append(req)
+        groups = _merge_variable_segments(groups)
 
         clusters: list[EndpointCluster] = []
-        for key, group_requests in groups.items():
-            method, _ = key.split(":", 1)
-
-            # Use the URL template from the first request (they all share the same normalised path)
-            parsed = urlparse(group_requests[0].url)
-            normalised_path = _normalise_path(parsed.path)
-            base_url = _extract_base_url(group_requests[0].url)
-            url_template = base_url + normalised_path
+        for (method, base_url, segments), group_requests in groups.items():
+            url_template = base_url + "/" + "/".join(segments)
 
             # Collect unique, non-None action labels
             action_labels: list[str] = list(

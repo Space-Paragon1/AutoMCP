@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from urllib.parse import urlparse
 
 from core.auth.headers import AUTH_HEADERS
@@ -32,6 +33,27 @@ BLOCKED_SEGMENTS = {
 }
 # Segment prefixes for tracker scripts/pixels (e.g. /ga.js, /gtm.js)
 BLOCKED_SEGMENT_PREFIXES = ("ga.", "gtm.", "__utm")
+
+# Logging in is the user's job, not a tool's: these steps (and 2FA polling)
+# never become tools.
+AUTH_FLOW_SEGMENTS = {
+    "login", "logout", "signin", "signout", "sign_in", "sign_out", "sign-in", "sign-out",
+    "signup", "sign_up", "sign-up", "two-factor", "two_factor", "2fa", "mfa", "u2f",
+    "webauthn", "otp", "password_reset", "forgot_password", "reset_password",
+}
+# Endpoints that hand out tokens (".../token", "/cmc-api-token", "/csrf_token").
+# As tools they would give the AI live credentials.
+_CREDENTIAL_SEGMENT = re.compile(r"(^|[-_.])(token|tokens|csrf)$", re.I)
+# A password field in a JSON, URL-encoded or multipart body: a login, sign-up
+# or password change, which must never become a tool
+_PASSWORD_FIELD = re.compile(
+    r'"[^"]*pass(?:word|wd)[^"]*"\s*:'
+    r"|(?:^|&)[^=&]*pass(?:word|wd)[^=&]*="
+    r'|name="[^"]*pass(?:word|wd)[^"]*"',
+    re.I,
+)
+# Build files with a content hash in the name (opt-in.specrule-0a0e9d38bd18.json)
+_HASHED_FILE = re.compile(r"[.-][0-9a-f]{8,}\.(?:json|js|mjs|css|map|wasm)$", re.I)
 
 # Playwright resource types that are never API calls
 NON_API_RESOURCE_TYPES = {
@@ -128,8 +150,16 @@ class EventClassifier:
             reasons.append("Blocked domain (analytics/tracking)")
         if self._is_blocked_pattern(request.url):
             reasons.append("Tracking or site-internal URL pattern")
-        if request.response_status in (301, 302, 303, 307, 308):
+        if self._is_auth_flow(request.url):
+            reasons.append("Login step or token endpoint (never a tool)")
+        if request.response_status in (404, 405, 410):
+            reasons.append(f"Failed request (HTTP {request.response_status})")
+        # A redirected GET is just a page move, but a form POST that redirects
+        # afterwards (to the thing it created) is a real action
+        if request.response_status in (301, 302, 303, 307, 308) and request.method in ("GET", "HEAD"):
             reasons.append("Redirect response")
+        if _PASSWORD_FIELD.search(request.request_body or ""):
+            reasons.append("Sends a password (login or account change, never a tool)")
         rtype = request.resource_type
         if rtype in NON_API_RESOURCE_TYPES:
             reasons.append(f"Not an API call (resource type: {rtype})")
@@ -161,8 +191,16 @@ class EventClassifier:
         host = _host(url)
         return any(host == d or host.endswith("." + d) for d in self.blocked_domains)
 
+    def _is_auth_flow(self, url: str) -> bool:
+        segments = [s.lower() for s in urlparse(url).path.split("/") if s]
+        return any(seg in AUTH_FLOW_SEGMENTS for seg in segments) or bool(
+            segments and _CREDENTIAL_SEGMENT.search(segments[-1])
+        )
+
     def _is_blocked_pattern(self, url: str) -> bool:
         segments = [s.lower() for s in urlparse(url).path.split("/") if s]
+        if segments and _HASHED_FILE.search(segments[-1]):
+            return True
         return any(
             seg in BLOCKED_SEGMENTS or seg.startswith(BLOCKED_SEGMENT_PREFIXES)
             for seg in segments

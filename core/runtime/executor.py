@@ -20,9 +20,10 @@ import httpx
 from core.auth.replay import build_request_headers
 from core.config import settings
 from core.runtime.middleware import RateLimiter, RetryConfig, ToolError, with_retry
+from core.runtime.forms import find_form_token
+from core.runtime.trim import html_to_text, trim_json, trim_text
 
 PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
-MAX_TEXT_CHARS = 50_000
 AUTH_CACHE_SECONDS = 30.0
 
 # Tests can point this at an httpx.MockTransport
@@ -126,9 +127,10 @@ def _auth_error(status: int, session_id: str | None, renew_tried: bool) -> ToolE
 def _parse_response(response: httpx.Response, response_type: str) -> Any:
     if not response.content:
         return {"status": response.status_code, "ok": True}
+    limit = settings.max_response_chars
     if response_type == "json":
         try:
-            return response.json()
+            return trim_json(response.json(), limit)
         except ValueError:
             pass  # Fall through to text: some "JSON" endpoints return HTML on error
     if response_type == "binary":
@@ -138,9 +140,76 @@ def _parse_response(response: httpx.Response, response_type: str) -> Any:
             "size_bytes": len(response.content),
         }
     text = response.text
-    if len(text) > MAX_TEXT_CHARS:
-        text = text[:MAX_TEXT_CHARS] + f"\n...[truncated, {len(response.text)} chars total]"
-    return text
+    if "html" in response.headers.get("content-type", "").lower():
+        text = html_to_text(text)  # The readable page, not its markup and scripts
+    return trim_text(text, limit)
+
+
+def _nest(payload: dict[str, Any]) -> dict[str, Any]:
+    """Expand dotted field names into a nested JSON body: {"input.title": x} -> {"input": {"title": x}}."""
+    out: dict[str, Any] = {}
+    for key, value in payload.items():
+        node = out
+        *parents, leaf = key.split(".")
+        for part in parents:
+            if not isinstance(node.get(part), dict):
+                node[part] = {}
+            node = node[part]
+        node[leaf] = value
+    return out
+
+
+def _body_kwargs(method: str, encoding: str | None, payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload:
+        return {}
+    if method in ("GET", "DELETE", "HEAD"):
+        return {"params": payload}
+    if encoding == "form":
+        return {"data": payload}
+    if encoding == "multipart":
+        # (None, value) makes httpx send a plain form field, not a file
+        return {"files": {
+            k: (None, v if isinstance(v, str) else json.dumps(v)) for k, v in payload.items()
+        }}
+    return {"json": _nest(payload)}
+
+
+async def _fresh_form_token(
+    spec: dict[str, Any], args: dict[str, Any], action_url: str, base_headers: dict[str, str]
+) -> str | None:
+    """Load the page the form was on and read its current security token."""
+    pages: list[str] = []
+    if spec.get("csrf_page"):
+        try:
+            pages.append(build_url(spec["csrf_page"], args))
+        except ToolError:
+            pass
+    parent = action_url.rsplit("/", 1)[0]  # /me/repo/star -> /me/repo
+    if parent not in pages:
+        pages.append(parent)
+
+    # A plain page load: cookies and login, none of the API-call markers
+    page_headers = {
+        k: v for k, v in base_headers.items()
+        if k in ("cookie", "user-agent", "accept-language", "authorization")
+    }
+    page_headers["accept"] = "text/html,application/xhtml+xml"
+    fallback = None
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, transport=_transport) as client:
+        for page in pages:
+            try:
+                response = await client.get(page, headers=page_headers)
+            except httpx.HTTPError:
+                continue
+            if response.status_code != 200:
+                continue
+            exact, loose = find_form_token(
+                response.text, spec["csrf_field"], str(response.url), action_url
+            )
+            if exact:
+                return exact
+            fallback = fallback or loose
+    return fallback
 
 
 async def _send(spec: dict[str, Any], args: dict[str, Any]) -> Any:
@@ -148,18 +217,9 @@ async def _send(spec: dict[str, Any], args: dict[str, Any]) -> Any:
     url = build_url(spec["url_template"], args)
     payload = build_payload(spec, args)
     session_id = spec.get("session_id")
+    needs_form_token = bool(spec.get("csrf_field")) and method not in ("GET", "HEAD")
 
-    body_kwargs: dict[str, Any] = {}
-    if method in ("GET", "DELETE", "HEAD"):
-        if payload:
-            body_kwargs["params"] = payload
-    elif payload:
-        if spec.get("body_encoding") == "form":
-            body_kwargs["data"] = payload
-        else:
-            body_kwargs["json"] = payload
-
-    async def _call(headers: dict[str, str]) -> httpx.Response:
+    async def _call(headers: dict[str, str], body_kwargs: dict[str, Any]) -> httpx.Response:
         async with httpx.AsyncClient(
             timeout=30.0, follow_redirects=True, transport=_transport
         ) as client:
@@ -170,12 +230,21 @@ async def _send(spec: dict[str, Any], args: dict[str, Any]) -> Any:
 
     renew_tried = False
     while True:
-        headers = build_request_headers(await load_auth_state(session_id), url)
+        base = build_request_headers(await load_auth_state(session_id), url)
+        headers = {**base, **(spec.get("headers") or {})}  # Plus this endpoint's own headers
         headers.setdefault(
             "accept", "application/json" if spec.get("response_type") == "json" else "*/*"
         )
+        body = dict(payload)
+        if needs_form_token:
+            token = await _fresh_form_token(spec, args, url, base)
+            if token:
+                body[spec["csrf_field"]] = token
         await _rate_limiter.acquire()
-        response = await with_retry(functools.partial(_call, headers), RetryConfig(max_attempts=3))
+        response = await with_retry(
+            functools.partial(_call, headers, _body_kwargs(method, spec.get("body_encoding"), body)),
+            RetryConfig(max_attempts=3),
+        )
         if response.status_code not in (401, 403):
             return _parse_response(response, spec.get("response_type", "json"))
         # Logged out: renew the login once in the background, then try again
