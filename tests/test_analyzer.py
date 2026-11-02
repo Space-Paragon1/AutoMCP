@@ -4,9 +4,10 @@ from types import SimpleNamespace
 import pytest
 
 from core.analyzer.endpoint_clusterer import EndpointClusterer, _normalise_path
-from core.analyzer.event_classifier import EventClassifier
+from core.analyzer.event_classifier import EventClassifier, site_of
 from core.analyzer.tool_spec_builder import (
     SYSTEM_PROMPT,
+    TOOL_SPECS_SCHEMA,
     LLMProvider,
     ToolSpecBuilder,
     redact_body,
@@ -90,6 +91,62 @@ def test_classifier_drops_page_loads_unless_asked():
 
 
 # ---------------------------------------------------------------- redaction
+
+def test_site_of_groups_subdomains_but_not_shared_hosting():
+    assert site_of("api.example.com") == "example.com"
+    assert site_of("www.shop.example.co.uk") == "example.co.uk"
+    assert site_of("alice.github.io") == "alice.github.io"
+    assert site_of("127.0.0.1") == "127.0.0.1"
+    assert site_of("localhost") == "localhost"
+
+
+def test_classifier_drops_other_sites_but_keeps_hosted_backends():
+    page = _req("https://app.example.com/", resource_type="document",
+                request_headers={"sec-fetch-dest": "document"})
+    widget_frame = _req("https://js.stripe.com/v3/m-outer.html", resource_type="document",
+                        request_headers={"sec-fetch-dest": "iframe"})
+    reqs = [
+        page, widget_frame,
+        _req("https://api.example.com/v1/boards"),
+        _req("https://fonts.example-cdn.net/list"),
+        _req("https://xyz.supabase.co/rest/v1/todos", request_headers={"authorization": "Bearer t"}),
+        _req("https://api.stripe.com/v1/payment_methods", request_headers={"authorization": "Bearer pk"}),
+        _req("https://partner.io/api/data"),
+    ]
+    classifier = EventClassifier(site_url="https://app.example.com/", allowed_hosts=["partner.io"])
+    kept = [r.url for r in classifier.classify(reqs)]
+    assert kept == [
+        "https://api.example.com/v1/boards",
+        "https://xyz.supabase.co/rest/v1/todos",
+        "https://partner.io/api/data",
+    ]
+    assert classifier.get_rejection_reason(reqs[3]) == [
+        "Third-party site fonts.example-cdn.net (use --allow-host to keep)"
+    ]
+
+
+def test_classifier_counts_sites_the_user_navigated_to_as_first_party():
+    reqs = [
+        _req("https://www.google.com/", resource_type="document",
+             request_headers={"sec-fetch-dest": "document"}),
+        _req("https://app.other.com/home", resource_type="document",
+             request_headers={"sec-fetch-dest": "document"}),
+        _req("https://api.other.com/items"),
+    ]
+    kept = EventClassifier(site_url="https://www.google.com/").classify(reqs)
+    assert [r.url for r in kept] == ["https://api.other.com/items"]
+
+
+def test_classifier_drops_site_internal_files():
+    kept = EventClassifier().classify([
+        _req("https://x.com/cdn-cgi/rum", method="POST"),
+        _req("https://x.com/_next/data/abc123/boards.json"),
+        _req("https://x.com/page-data/app/page-data.json"),
+        _req("https://x.com/docs/routeInfo.json"),
+        _req("https://x.com/api/boards"),
+    ])
+    assert [r.url for r in kept] == ["https://x.com/api/boards"]
+
 
 def test_redact_body_hides_secrets_and_keeps_shape():
     out = json.loads(redact_body(json.dumps(
@@ -197,6 +254,39 @@ async def test_build_specs_avoids_taken_names():
     assert specs[0].tool_name == "tool0_2"
 
 
+async def test_build_specs_uses_structured_output_and_keeps_recorded_types():
+    req = _req(
+        "https://x.com/api/boards/123/cards", method="POST",
+        request_headers={"content-type": "application/json"},
+        request_body=json.dumps({"name": "Milk", "pos": "bottom", "limit": 50, "closed": False}),
+    )
+    clusters = EndpointClusterer().cluster([req])
+
+    def respond(cs):
+        return json.dumps({"specs": [{
+            **_spec_for(cs[0]),
+            "inputs": [{"name": "title", "type": "string", "required": True, "description": ""}],
+            "csrf_strategy": "",
+            "request_mapping": [
+                {"field": "name", "value": "$input.title"},
+                {"field": "pos", "value": "bottom"},
+                {"field": "limit", "value": "50"},
+                {"field": "closed", "value": "false"},
+            ],
+        }]}), "end_turn"
+
+    fake = FakeAnthropic(respond)
+    specs = await ToolSpecBuilder(client=fake).build_specs(clusters, {req.id: req}, "s")
+
+    assert fake.calls[0]["output_config"] == {
+        "format": {"type": "json_schema", "schema": TOOL_SPECS_SCHEMA}
+    }
+    assert specs[0].request_mapping == {
+        "name": "$input.title", "pos": "bottom", "limit": 50, "closed": False,
+    }
+    assert specs[0].csrf_strategy is None
+
+
 # ---------------------------------------------------------------- gemini
 
 class FakeGemini:
@@ -240,6 +330,7 @@ async def test_gemini_builds_specs_and_splits_truncated_batches(monkeypatch):
     # A Claude model name in AUTOMCP_LLM_MODEL must not be sent to Google
     assert {c["model"] for c in fake.calls} == {"gemini-flash-latest"}
     assert fake.calls[0]["config"].system_instruction == SYSTEM_PROMPT
+    assert fake.calls[0]["config"].response_json_schema == TOOL_SPECS_SCHEMA
 
 
 async def test_gemini_retry_sends_bad_answer_back_as_model_turn(monkeypatch):
