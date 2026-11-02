@@ -9,8 +9,9 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.syntax import Syntax
 
-from core.storage.db import get_db
 from core.runtime.tool_loader import ToolLoader
+from core.storage.db import get_db
+from core.storage.models import ToolInput
 
 console = Console()
 
@@ -52,17 +53,7 @@ async def run_test(tool_name: str) -> None:
         title="AutoMCP — Test Tool",
     ))
 
-    kwargs: dict = {}
-    for inp in spec.inputs:
-        label = f"{inp.name} ({'required' if inp.required else 'optional, Enter to skip'})"
-        value = Prompt.ask(label, default="" if not inp.required else ...)
-        if not value:
-            continue
-        try:
-            kwargs[inp.name] = _coerce(value, inp.type)
-        except ValueError as e:
-            console.print(f"[red]Invalid value for {inp.name}:[/] {e}")
-            return
+    kwargs = _ask_inputs(spec.inputs)
 
     try:
         fn = ToolLoader().load_and_get(file_path, tool_name)
@@ -87,6 +78,26 @@ async def run_test(tool_name: str) -> None:
             title="[green]Result[/]",
         ))
     console.print("[dim]Logged to execution history (automcp logs)[/]")
+
+
+def _ask_inputs(inputs: list[ToolInput]) -> dict[str, object]:
+    """Prompt for each input, asking again when a required one is empty or a value is invalid."""
+    values: dict[str, object] = {}
+    for inp in inputs:
+        label = f"{inp.name} ({'required' if inp.required else 'optional, Enter to skip'})"
+        while True:
+            raw = Prompt.ask(label, default="", show_default=False).strip()
+            if not raw:
+                if not inp.required:
+                    break
+                console.print(f"[yellow]{inp.name} is required, please enter a value.[/]")
+                continue
+            try:
+                values[inp.name] = _coerce(raw, inp.type)
+                break
+            except ValueError as e:
+                console.print(f"[red]Invalid {inp.type} for {inp.name}:[/] {e}")
+    return values
 
 
 def _coerce(value: str, type_name: str) -> object:
