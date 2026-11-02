@@ -101,9 +101,14 @@ def analyze(
         False, "--include-pages",
         help="Also analyze full HTML page loads (for server-rendered sites without a JSON API)",
     ),
+    allow_host: list[str] = typer.Option(
+        None, "--allow-host",
+        help="Keep calls to this other site (repeatable). By default only the recorded "
+             "site's own calls are analyzed.",
+    ),
 ) -> None:
     """Analyze captured requests and generate tool specs."""
-    asyncio.run(_analyze(session_id, output, min_confidence, provider, include_pages))
+    asyncio.run(_analyze(session_id, output, min_confidence, provider, include_pages, allow_host))
 
 
 _PROVIDER_KEYS = {
@@ -140,7 +145,11 @@ async def _analyze(
     min_confidence: float | None,
     provider: str | None = None,
     include_pages: bool = False,
+    allow_host: list[str] | None = None,
 ) -> None:
+    from collections import Counter
+    from urllib.parse import urlparse
+
     from core.analyzer.endpoint_clusterer import EndpointClusterer
     from core.analyzer.event_classifier import EventClassifier
     from core.analyzer.tool_spec_builder import LLMProvider, ToolSpecBuilder
@@ -160,10 +169,11 @@ async def _analyze(
     with console.status("[bold green]Loading captured requests...[/]"):
         async with get_db() as db:
             full_session_id = await db.resolve_session_id(session_id)
+            session = await db.get_session(full_session_id) if full_session_id else None
             requests = await db.get_requests_for_session(full_session_id) if full_session_id else []
             all_specs = await db.get_tool_specs()
 
-    if not full_session_id:
+    if not full_session_id or session is None:
         console.print(f"[red]Session not found:[/] {session_id}")
         raise typer.Exit(1)
     session_id = full_session_id  # always use full UUID from here on
@@ -174,13 +184,29 @@ async def _analyze(
 
     console.print(f"Loaded [bold]{len(requests)}[/] requests")
 
-    classifier = EventClassifier(include_pages=include_pages)
+    classifier = EventClassifier(
+        include_pages=include_pages, site_url=session.url, allowed_hosts=allow_host
+    )
     filtered = classifier.classify(requests)
     rejected = len(requests) - len(filtered)
     console.print(
         f"Filtered to [bold]{len(filtered)}[/] useful requests "
         f"([dim]{rejected} rejected[/])"
     )
+    # Mention other sites that only failed the third-party check, so the user
+    # can bring one back if it turns out to be the app's real API
+    other_sites: Counter[str] = Counter()
+    for r in requests:
+        reasons = classifier.get_rejection_reason(r)
+        if reasons and all(reason.startswith("Third-party") for reason in reasons):
+            other_sites[urlparse(r.url).hostname or ""] += 1
+    if other_sites:
+        hosts = ", ".join(f"{h} ({n})" for h, n in other_sites.most_common(5))
+        more = f" and {len(other_sites) - 5} more" if len(other_sites) > 5 else ""
+        console.print(
+            f"[dim]Skipped calls to other sites: {hosts}{more}. "
+            "Keep one with --allow-host HOST.[/]"
+        )
 
     if not filtered:
         console.print("[yellow]No useful requests remain after filtering.[/]")
@@ -280,16 +306,13 @@ def generate(
 
 
 async def _generate(session_id: str, output_dir: Path | None) -> None:
-    from core.codegen.python_mcp_generator import GenerationError, PythonMcpGenerator
-    from core.codegen.validator import CodeValidator
+    from core.codegen.pipeline import generate_tools
     from core.storage.db import get_db
-    from core.storage.models import GeneratedTool
 
     out_dir = Path(output_dir or settings.generated_tools_dir)
 
     async with get_db() as db:
         specs = await db.get_tool_specs(session_id=session_id)
-        all_tools = await db.get_generated_tools()
 
     if not specs:
         console.print(f"[red]No tool specs found for session {session_id}[/]")
@@ -302,53 +325,22 @@ async def _generate(session_id: str, output_dir: Path | None) -> None:
         console.print(f"Run [bold]automcp review {session_id}[/] to approve specs first")
         raise typer.Exit(0)
 
-    # Tool files are named after the tool, so names must be unique across sessions
-    spec_ids = {s.spec_id for s in specs}
-    names_elsewhere = {
-        t.tool_name for t in all_tools
-        if t.spec_id not in spec_ids and t.validation_status == "valid"
-    }
-
-    generator = PythonMcpGenerator(output_dir=out_dir)
-    validator = CodeValidator()
+    records = await generate_tools(specs, out_dir)
 
     table = Table(title="Generated Tools")
     table.add_column("Tool Name", style="cyan")
     table.add_column("File")
     table.add_column("Valid", justify="center")
     table.add_column("Notes")
-
-    valid_count = 0
-    for spec in specs:
-        record = GeneratedTool(spec_id=spec.spec_id, tool_name=spec.tool_name, file_path="")
-        if spec.tool_name in names_elsewhere:
-            record.validation_status = "invalid"
-            record.validation_errors = [
-                f"Name '{spec.tool_name}' is already used by a tool from another session; "
-                "rename it with automcp review"
-            ]
-        else:
-            try:
-                path = generator.generate(spec, output_dir=out_dir)
-                record.file_path = str(path.resolve())
-                result = validator.validate_file(path, spec)
-                record.validation_status = "valid" if result.is_valid else "invalid"
-                record.validation_errors = result.errors
-            except GenerationError as e:
-                record.validation_status = "invalid"
-                record.validation_errors = [str(e)]
-
-        async with get_db() as db:
-            await db.save_generated_tool(record)
-
+    for record in records:
         ok = record.validation_status == "valid"
-        valid_count += ok
         notes = ", ".join(record.validation_errors[:2]) if record.validation_errors else "OK"
         file_name = Path(record.file_path).name if record.file_path else "—"
-        table.add_row(spec.tool_name, file_name, "[green]✓[/]" if ok else "[red]✗[/]", notes[:80])
+        table.add_row(record.tool_name, file_name, "[green]✓[/]" if ok else "[red]✗[/]", notes[:80])
 
+    valid_count = sum(r.validation_status == "valid" for r in records)
     console.print(table)
-    console.print(f"\n{valid_count}/{len(specs)} tools written to [cyan]{out_dir}[/]")
+    console.print(f"\n{valid_count}/{len(records)} tools written to [cyan]{out_dir}[/]")
     if valid_count:
         console.print("Run [bold]automcp serve[/] to start the MCP server")
 
@@ -636,8 +628,13 @@ async def _auth_check(session_id: str, probe_url: str | None) -> None:
     if not health.is_valid:
         console.print(
             f"\n[yellow]Credentials appear expired.[/] "
-            f"Refresh with: [bold]automcp auth-refresh {full_id[:8]}[/]"
+            f"Log in again with: [bold]automcp auth-refresh {full_id[:8]}[/]"
         )
+        if not state.get("login"):
+            console.print(
+                f"To renew by itself next time, save the password with: "
+                f"[bold]automcp auth-login {full_id[:8]}[/]"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -648,15 +645,19 @@ async def _auth_check(session_id: str, probe_url: str | None) -> None:
 @app.command()
 def auth_refresh(
     session_id: str = typer.Argument(..., help="Session ID to refresh auth for"),
+    auto: bool = typer.Option(
+        False, "--auto",
+        help="Renew in a hidden browser without you (what tools do by themselves on HTTP 401)",
+    ),
 ):
     """Re-open the browser to refresh expired auth credentials."""
     try:
-        asyncio.run(_auth_refresh(session_id))
+        asyncio.run(_auth_refresh(session_id, auto))
     except KeyboardInterrupt:
         pass
 
 
-async def _auth_refresh(session_id: str) -> None:
+async def _auth_refresh(session_id: str, auto: bool = False) -> None:
     from core.recorder.browser_session import BrowserSession
     from core.storage.db import get_db
 
@@ -667,6 +668,10 @@ async def _auth_refresh(session_id: str) -> None:
     if session is None:
         console.print(f"[red]Session not found:[/] {session_id}")
         raise typer.Exit(1)
+
+    if auto:
+        await _renew_and_check(full_id)
+        return
 
     console.print(Panel(
         f"[bold]Refreshing auth for session[/] [cyan]{full_id[:8]}[/]\n"
@@ -682,6 +687,110 @@ async def _auth_refresh(session_id: str) -> None:
         pass  # Ctrl+C: the fresh auth state has still been saved
 
     console.print("Generated tools use the new login automatically (within 30 seconds).")
+
+
+async def _renew_and_check(full_id: str) -> None:
+    """Run the background login renewal now, then probe whether it worked."""
+    from core.auth.relogin import renew_login
+
+    with console.status("[bold green]Renewing the login in a hidden browser...[/]"):
+        renewed = await renew_login(full_id, force=True)
+    if not renewed:
+        console.print("[red]Renewal failed.[/] Log in yourself with "
+                      f"[bold]automcp auth-refresh {full_id[:8]}[/]")
+        raise typer.Exit(1)
+    console.print("[dim]Hidden browser finished. Checking the login...[/]")
+    await _auth_check(full_id, None)
+
+
+# ---------------------------------------------------------------------------
+# auth-login
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def auth_login(
+    session_id: str = typer.Argument(..., help="Session to save a login for"),
+    login_url: str = typer.Option(
+        None, "--login-url", help="Page with the login form (default: the recorded URL)"
+    ),
+    username: str = typer.Option(None, "--username", "-u", help="Username or email"),
+    username_selector: str = typer.Option(
+        None, "--username-selector", help="CSS selector for the username field, if not found"
+    ),
+    password_selector: str = typer.Option(
+        None, "--password-selector", help="CSS selector for the password field, if not found"
+    ),
+    clear: bool = typer.Option(False, "--clear", help="Forget the saved login"),
+):
+    """Save a username and password so expired logins renew by themselves.
+
+    The password is stored encrypted in the local vault. When a tool gets
+    HTTP 401, AutoMCP fills in the site's login form in a hidden browser and
+    retries. Logins with one-time codes or captchas can't be automated; use
+    auth-refresh for those.
+    """
+    asyncio.run(_auth_login(
+        session_id, login_url, username, username_selector, password_selector, clear
+    ))
+
+
+async def _auth_login(
+    session_id: str,
+    login_url: str | None,
+    username: str | None,
+    username_selector: str | None,
+    password_selector: str | None,
+    clear: bool,
+) -> None:
+    from rich.prompt import Prompt
+
+    from core.auth.relogin import login_secret_names
+    from core.auth.vault import get_vault
+    from core.storage.db import get_db
+
+    async with get_db() as db:
+        full_id = await db.resolve_session_id(session_id) or session_id
+        session = await db.get_session(full_id)
+    if session is None:
+        console.print(f"[red]Session not found:[/] {session_id}")
+        raise typer.Exit(1)
+
+    state = dict(session.browser_context_state or {})
+    user_key, pass_key = login_secret_names(full_id)
+    vault = get_vault()
+
+    if clear:
+        state.pop("login", None)
+        vault.delete(user_key)
+        vault.delete(pass_key)
+        async with get_db() as db:
+            await db.update_session_auth(full_id, state)
+        console.print(f"[green]Forgot the saved login for session[/] [cyan]{full_id[:8]}[/]")
+        return
+
+    username = username or Prompt.ask("Username or email (Enter if the form has none)", default="")
+    password = Prompt.ask("Password", password=True)
+    if not password:
+        console.print("[red]A password is required.[/]")
+        raise typer.Exit(1)
+
+    vault.set(pass_key, password)
+    if username:
+        vault.set(user_key, username)
+    else:
+        vault.delete(user_key)
+    state["login"] = {
+        "url": login_url or session.url,
+        "username_secret": user_key if username else None,
+        "password_secret": pass_key,
+        "username_selector": username_selector,
+        "password_selector": password_selector,
+    }
+    async with get_db() as db:
+        await db.update_session_auth(full_id, state)
+    console.print("[green]Login saved[/] (password encrypted in the local vault). Trying it now...")
+    await _renew_and_check(full_id)
 
 
 # ---------------------------------------------------------------------------

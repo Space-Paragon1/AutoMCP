@@ -846,6 +846,67 @@ td.right { text-align: right; }
 .btn-sm:hover { background: var(--surface-3); color: var(--text-1); border-color: rgba(124,58,237,0.4); }
 .btn-sm svg { width: 12px; height: 12px; }
 
+/* ─── Actions: generate, try a tool ─────────────────────────────────────────── */
+.btn-primary { background: var(--purple); border-color: var(--purple); color: #fff; }
+.btn-primary:hover { background: var(--purple-2); border-color: var(--purple-2); color: #fff; }
+.btn-sm:disabled { opacity: 0.55; cursor: wait; }
+
+#tool-detail { flex: 1; min-width: 0; display: none; flex-direction: column; gap: 16px; }
+#tool-detail.visible { display: flex; }
+#tool-detail #code-viewer { flex: none; }
+
+.runner-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+.runner-purpose { font-size: 0.8125rem; color: var(--text-2); }
+.runner-endpoint { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--text-3); word-break: break-all; }
+.runner-field { display: flex; flex-direction: column; gap: 4px; }
+.runner-field label { font-size: 0.75rem; font-weight: 600; color: var(--text-2); }
+.runner-field label .hint, .runner-hint { font-size: 0.72rem; font-weight: 400; color: var(--text-3); }
+.runner-input {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: var(--text-1);
+  font-size: 0.8rem;
+  font-family: 'Inter', sans-serif;
+  outline: none;
+}
+.runner-input:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(124,58,237,0.1); }
+textarea.runner-input { font-family: 'JetBrains Mono', monospace; min-height: 64px; resize: vertical; }
+.runner-warning { font-size: 0.75rem; color: var(--yellow); }
+.runner-actions { display: flex; align-items: center; gap: 12px; }
+.runner-status { font-size: 0.75rem; color: var(--text-3); }
+.runner-result {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-1);
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.runner-result.error { color: #f87171; border-color: rgba(239,68,68,0.25); }
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.73rem;
+  font-weight: 600;
+  background: rgba(124,58,237,0.15);
+  border: 1px solid rgba(124,58,237,0.4);
+  color: #c4b5fd;
+}
+.filter-chip button { background: none; border: none; color: inherit; cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 0; }
+
 /* ─── Empty state ──────────────────────────────────────────────────────────── */
 .empty-state {
   display: flex;
@@ -1202,8 +1263,14 @@ pre[class*="language-"] { background: var(--surface) !important; }
       <div class="section-header">
         <div>
           <div class="section-title">Tool Specs</div>
-          <div class="section-sub">API endpoint specifications extracted from sessions</div>
+          <div class="section-sub">Approve the specs you want, then generate their tool files</div>
         </div>
+        <button class="btn-sm btn-primary" id="generate-btn" onclick="generateTools()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          </svg>
+          Generate tools
+        </button>
       </div>
 
       <div class="card">
@@ -1228,6 +1295,7 @@ pre[class*="language-"] { background: var(--surface) !important; }
             <button class="pill" data-status="approved">Approved</button>
             <button class="pill" data-status="pending">Pending</button>
           </div>
+          <span id="session-chip"></span>
         </div>
         <div class="table-wrap">
           <table>
@@ -1248,7 +1316,7 @@ pre[class*="language-"] { background: var(--surface) !important; }
       <div class="section-header">
         <div>
           <div class="section-title">Generated Tools</div>
-          <div class="section-sub">Click a row to inspect the source code</div>
+          <div class="section-sub">Click a tool to try it out and see its source code</div>
         </div>
       </div>
 
@@ -1268,6 +1336,15 @@ pre[class*="language-"] { background: var(--surface) !important; }
           </div>
         </div>
 
+        <div id="tool-detail">
+        <div class="card" id="tool-runner">
+          <div class="card-header">
+            <span class="card-title">Try it</span>
+            <span class="card-count" id="runner-method"></span>
+          </div>
+          <div class="runner-body" id="runner-body"></div>
+        </div>
+
         <div id="code-viewer">
           <div class="code-viewer-header">
             <div class="code-filename">
@@ -1285,6 +1362,7 @@ pre[class*="language-"] { background: var(--surface) !important; }
           </div>
           <pre id="code-pre"><code id="code-content" class="language-python"></code></pre>
         </div>
+        </div>
 
         <div id="code-placeholder-outer" class="card" style="flex:1;display:flex;align-items:center;justify-content:center;">
           <div class="code-placeholder">
@@ -1292,7 +1370,7 @@ pre[class*="language-"] { background: var(--surface) !important; }
               <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
             </svg>
             <h3 style="color:var(--text-3);font-size:0.875rem;font-weight:600">Select a tool</h3>
-            <p style="font-size:0.8rem;color:var(--text-3)">Click any row to view source code</p>
+            <p style="font-size:0.8rem;color:var(--text-3)">Click any row to try it and view its source code</p>
           </div>
         </div>
       </div>
@@ -1506,6 +1584,7 @@ function showPanel(name) {
   if (navEl) navEl.classList.add('active');
 
   state.currentPanel = name;
+  state.sessionFilter = null;
 
   // Update breadcrumb
   const bcLabel = document.getElementById('breadcrumb-label');
@@ -1601,7 +1680,7 @@ function renderSessions() {
     const recAt = fmtDate(s.started_at);
     const idHl  = hl(esc(s.short_id), q);
     const urlHl = hl(esc(url), q);
-    return `<tr class="clickable" onclick="goToSpecsForSession('${esc(s.session_id || s.short_id)}')">
+    return `<tr class="clickable" onclick="goToSpecsForSession('${esc(s.id)}')">
       <td><span class="mono mono-purple">${idHl}</span></td>
       <td><span class="truncate" title="${esc(url)}">${urlHl}</span></td>
       <td><span class="mono-dim">${recAt}</span></td>
@@ -1611,8 +1690,23 @@ function renderSessions() {
 }
 
 function goToSpecsForSession(sessionId) {
-  state.sessionFilter = sessionId;
   showPanel('specs');
+  state.sessionFilter = sessionId;
+  renderSpecs();
+}
+
+function clearSessionFilter() {
+  state.sessionFilter = null;
+  renderSpecs();
+}
+
+function renderSessionChip() {
+  const chip = document.getElementById('session-chip');
+  if (!state.sessionFilter) { chip.innerHTML = ''; return; }
+  const sess = state.sessions.find(x => x.id === state.sessionFilter);
+  const label = sess ? sess.short_id : state.sessionFilter.slice(0, 8);
+  chip.innerHTML = `<span class="filter-chip">Session ${esc(label)}
+    <button onclick="clearSessionFilter()" title="Show all sessions">&times;</button></span>`;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1620,6 +1714,7 @@ function goToSpecsForSession(sessionId) {
 ───────────────────────────────────────────────────────────────────────────── */
 function renderSpecs() {
   const tbody = document.getElementById('specs-tbody');
+  renderSessionChip();
   const filtered = filterSpecs(state.specs);
 
   if (!filtered.length) {
@@ -1636,14 +1731,14 @@ function renderSpecs() {
     const conf    = parseFloat(s.confidence) || 0;
     const confPct = Math.round(conf * 100);
     const confCls = conf >= 0.8 ? 'high' : conf >= 0.6 ? 'medium' : 'low';
-    const quality = parseFloat(s.quality_score) || 0;
-    const qualStr = quality.toFixed(1);
+    const quality = s.quality_score ? (parseFloat(s.quality_score.composite) || 0) : null;
+    const qualStr = quality === null ? '—' : quality.toFixed(2);
     const qualColor = quality >= 0.8 ? 'var(--green)' : quality >= 0.6 ? 'var(--yellow)' : 'var(--red)';
     const nameHl  = hl(esc(s.tool_name), q);
     const urlHl   = hl(esc(url), q);
 
     return `<tr>
-      <td><span class="mono mono-purple">${nameHl}</span></td>
+      <td><span class="mono mono-purple" title="${esc(s.purpose || '')}">${nameHl}</span></td>
       <td><span class="badge badge-${method}">${method}</span></td>
       <td><span class="truncate" title="${esc(url)}">${urlHl}</span></td>
       <td>
@@ -1675,11 +1770,9 @@ function filterSpecs(specs) {
   const q = state.search.toLowerCase();
   let out = specs;
 
-  // Session filter (from sessions panel click)
+  // Session filter (from sessions panel click); cleared with the chip's ×
   if (state.sessionFilter) {
     out = out.filter(s => (s.session_id || '') === state.sessionFilter);
-    // Auto-clear after first render
-    state.sessionFilter = null;
   }
 
   if (q) {
@@ -1772,9 +1865,11 @@ function renderTools() {
 async function loadSource(toolName) {
   state.activeToolName = toolName;
 
-  // Show viewer, hide placeholder
+  // Show the runner and viewer, hide placeholder
+  document.getElementById('tool-detail').classList.add('visible');
   document.getElementById('code-viewer').classList.add('visible');
   document.getElementById('code-placeholder-outer').style.display = 'none';
+  renderRunner(toolName);
 
   document.getElementById('code-filename-label').textContent = toolName + '.py';
   document.getElementById('code-content').textContent = 'Loading…';
@@ -1796,6 +1891,130 @@ async function loadSource(toolName) {
     document.getElementById('code-content').textContent = '# Error loading source: ' + err.message;
     state.activeSourceCode = '';
   }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   ACTIONS: GENERATE, TRY A TOOL
+───────────────────────────────────────────────────────────────────────────── */
+async function postJSON(url, body) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  let data = {};
+  try { data = await resp.json(); } catch { /* empty body */ }
+  if (!resp.ok) throw new Error(data.detail || ('Server returned ' + resp.status));
+  return data;
+}
+
+async function generateTools() {
+  const btn = document.getElementById('generate-btn');
+  btn.disabled = true;
+  try {
+    const body = state.sessionFilter ? { session_id: state.sessionFilter } : {};
+    const data = await postJSON('/api/generate', body);
+    const failed = data.tools.filter(t => !t.valid);
+    showToast(`${data.valid} of ${data.total} tools generated`, failed.length ? 'info' : 'success');
+    failed.forEach(t => showToast(`${t.tool_name}: ${(t.errors || [])[0] || 'invalid'}`, 'error'));
+    await loadAllData();
+    showPanel('tools');
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderRunner(toolName) {
+  const tools = state.tools.filter(t => t.tool_name === toolName);
+  const tool = tools.find(t => t.validation_status === 'valid') || tools[0];
+  const body = document.getElementById('runner-body');
+  const methodEl = document.getElementById('runner-method');
+
+  if (!tool || tool.validation_status !== 'valid') {
+    methodEl.textContent = '';
+    const why = tool && (tool.validation_errors || [])[0];
+    body.innerHTML = `<div class="runner-purpose">This tool failed validation, so it can't be run${
+      why ? ': ' + esc(why) : '.'}</div>`;
+    return;
+  }
+
+  const method = (tool.method || 'GET').toUpperCase();
+  methodEl.textContent = method;
+  const fields = (tool.inputs || []).map(inp => {
+    const id = 'run-in-' + inp.name;
+    const attrs = `class="runner-input" id="${esc(id)}" data-name="${esc(inp.name)}"`;
+    let control;
+    if (inp.type === 'boolean') {
+      control = `<select ${attrs}><option value="">—</option><option value="true">true</option><option value="false">false</option></select>`;
+    } else if (inp.type === 'array' || inp.type === 'object') {
+      control = `<textarea ${attrs} placeholder="${inp.type === 'array' ? '[ ]' : '{ }'} as JSON"></textarea>`;
+    } else {
+      const numeric = inp.type === 'integer' || inp.type === 'number';
+      control = `<input ${attrs} type="${numeric ? 'number' : 'text'}" ${inp.type === 'number' ? 'step="any"' : ''} autocomplete="off">`;
+    }
+    const hint = inp.type + (inp.required ? '' : ', optional');
+    return `<div class="runner-field">
+      <label for="${esc(id)}">${esc(inp.name)} <span class="hint">(${esc(hint)})</span></label>
+      ${control}
+      ${inp.description ? `<div class="runner-hint">${esc(inp.description)}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  const warning = method === 'GET' ? ''
+    : `<div class="runner-warning">Running this sends a real ${esc(method)} request to the site with your recorded login.</div>`;
+
+  body.innerHTML = `
+    ${tool.purpose ? `<div class="runner-purpose">${esc(tool.purpose)}</div>` : ''}
+    <div class="runner-endpoint">${esc(method)} ${esc(tool.url_template || '')}</div>
+    ${fields || '<div class="runner-hint">This tool takes no inputs.</div>'}
+    ${warning}
+    <div class="runner-actions">
+      <button class="btn-sm btn-primary" id="run-btn">Run</button>
+      <span class="runner-status" id="run-status"></span>
+    </div>
+    <pre class="runner-result" id="run-result" style="display:none"></pre>`;
+  document.getElementById('run-btn').addEventListener('click', () => runTool(tool.tool_name, method));
+}
+
+async function runTool(toolName, method) {
+  if (method !== 'GET' && !confirm(`Send a real ${method} request to the site with your recorded login?`)) return;
+
+  const inputs = {};
+  document.querySelectorAll('#runner-body [data-name]').forEach(el => {
+    if (el.value !== '') inputs[el.dataset.name] = el.value;
+  });
+  const btn = document.getElementById('run-btn');
+  const status = document.getElementById('run-status');
+  const out = document.getElementById('run-result');
+  btn.disabled = true;
+  status.textContent = 'Running…';
+  out.style.display = 'none';
+
+  try {
+    const data = await postJSON('/api/tools/' + encodeURIComponent(toolName) + '/run', { inputs });
+    status.textContent = `${data.ok ? 'Succeeded' : 'Failed'} in ${Math.round(data.duration_ms)} ms`;
+    out.className = 'runner-result' + (data.ok ? '' : ' error');
+    out.textContent = data.ok
+      ? (typeof data.result === 'string' ? data.result : JSON.stringify(data.result, null, 2))
+      : data.error;
+    refreshExecutions();
+  } catch (err) {
+    status.textContent = '';
+    out.className = 'runner-result error';
+    out.textContent = err.message;
+  } finally {
+    out.style.display = 'block';
+    btn.disabled = false;
+  }
+}
+
+async function refreshExecutions() {
+  try {
+    state.executions = await fetch('/api/executions').then(r => r.json());
+    updateStatCards();
+  } catch { /* the next full refresh will catch up */ }
 }
 
 function copySource() {

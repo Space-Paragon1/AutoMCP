@@ -9,6 +9,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.syntax import Syntax
 
+from core.runtime.inputs import coerce_input
 from core.runtime.tool_loader import ToolLoader
 from core.storage.db import get_db
 from core.storage.models import ToolInput
@@ -93,20 +94,8 @@ def _ask_inputs(inputs: list[ToolInput]) -> dict[str, object]:
                 console.print(f"[yellow]{inp.name} is required, please enter a value.[/]")
                 continue
             try:
-                values[inp.name] = _coerce(raw, inp.type)
+                values[inp.name] = coerce_input(raw, inp.type)
                 break
             except ValueError as e:
                 console.print(f"[red]Invalid {inp.type} for {inp.name}:[/] {e}")
     return values
-
-
-def _coerce(value: str, type_name: str) -> object:
-    if type_name == "integer":
-        return int(value)
-    if type_name == "number":
-        return float(value)
-    if type_name == "boolean":
-        return value.lower() in ("true", "1", "yes", "y")
-    if type_name in ("array", "object"):
-        return json.loads(value)
-    return value
