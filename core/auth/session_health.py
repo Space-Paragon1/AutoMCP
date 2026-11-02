@@ -1,7 +1,7 @@
 """Track auth session health and detect expired credentials."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
@@ -17,17 +17,6 @@ class AuthHealth:
     status_code: int | None = None
     error: str | None = None
     cookies_age_hours: float = 0.0
-
-
-@dataclass
-class RefreshStrategy:
-    """Describes how to re-authenticate for a session."""
-    session_id: str
-    login_url: str
-    method: str = "POST"
-    credential_keys: list[str] = field(default_factory=list)  # vault keys to use
-    body_template: dict[str, str] = field(default_factory=dict)  # {"username": "$vault.USER", "password": "$vault.PASS"}
-    success_status: int = 200
 
 
 class SessionHealthChecker:
