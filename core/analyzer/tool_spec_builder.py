@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from enum import Enum
 from typing import Any
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 import anthropic
 from pydantic import ValidationError
 
 from core.analyzer.schema_inferrer import SchemaInferrer
-from core.auth.csrf import CSRF_HEADERS
+from core.auth.csrf import CSRF_FIELD_NAMES, CSRF_HEADERS
 from core.auth.headers import AUTH_HEADERS
+from core.auth.replay import collect_host_headers, endpoint_headers
 from core.codegen.naming import normalize_spec
 from core.config import settings
 from core.storage.models import (
@@ -50,10 +52,13 @@ Input types must be one of: string, integer, number, boolean, array, object
 Rules:
 1. tool_name must be unique, snake_case, descriptive
 2. Path parameters: put {param} placeholders in url_template and add a matching input.
-   Do NOT also list path parameters in request_mapping.
+   Do NOT also list path parameters in request_mapping. A path segment that is clearly a
+   name someone chose (an account, repository, project or workspace name) is a parameter
+   too, even if only one value was recorded, so the tool works beyond that one example.
 3. request_mapping fields are the query-string fields for GET/DELETE, and the body fields for
    POST/PUT/PATCH. Map each to an input as "$input.<param_name>". A field the browser always
-   sent with the same value may be mapped to that fixed value instead.
+   sent with the same value may be mapped to that fixed value instead. For a nested JSON body,
+   name fields by their path with dots: {"input": {"title": ...}} -> "input.title".
 4. Leave out fields the browser fills in automatically (CSRF tokens, timestamps, client
    version numbers, tracking ids); authentication is handled for you.
 5. If the request has auth cookies, set auth_strategy to "cookies"
@@ -127,8 +132,19 @@ OPENAI_DEFAULT_MODEL = "gpt-4o"
 GEMINI_DEFAULT_MODEL = "gemini-flash-latest"
 
 
+# Gemini can take far more endpoints per request than the default batch, and
+# its free tier counts requests per day, so fewer, bigger requests go further
+GEMINI_BATCH_SIZE = 30
+
+
 class TruncatedResponse(Exception):
     """The LLM hit its output limit before finishing the JSON."""
+
+
+def _retry_seconds(message: str, default: float = 30.0) -> float:
+    match = re.search(r"retry in ([\d.]+)s|retryDelay['\"]?:\s*['\"]([\d.]+)s", message)
+    value = next((g for g in (match.groups() if match else ()) if g), None)
+    return min(float(value), 90.0) if value else default
 
 
 # ---------------------------------------------------------------------------
@@ -150,13 +166,30 @@ def _redact_value(value: Any) -> Any:
     return value
 
 
+_MULTIPART_FIELD = re.compile(
+    r'Content-Disposition: form-data; name="([^"]*)"[^\r\n]*\r?\n(?:[^\r\n]+\r?\n)*\r?\n(.*?)\r?\n--',
+    re.S,
+)
+
+
+def parse_multipart(body: str) -> dict[str, str] | None:
+    """Field name -> value for a multipart/form-data body, or None if it isn't one."""
+    if "Content-Disposition: form-data" not in body:
+        return None
+    return {name: value for name, value in _MULTIPART_FIELD.findall(body)}
+
+
 def redact_body(body: str | None, limit: int = 2000) -> str | None:
     """Remove passwords, tokens and JWTs from a request/response body."""
     if not body:
         return body
     text: str
+    multipart = parse_multipart(body)
     try:
-        text = json.dumps(_redact_value(json.loads(body)))
+        if multipart is not None:
+            text = json.dumps({"multipart_form_fields": _redact_value(multipart)})
+        else:
+            text = json.dumps(_redact_value(json.loads(body)))
     except (json.JSONDecodeError, ValueError):
         pairs = parse_qsl(body, keep_blank_values=True)
         if pairs and "=" in body and "\n" not in body:
@@ -212,8 +245,50 @@ def _build_cluster_prompt(
 def _body_encoding(request: CapturedRequest) -> str:
     content_type = next(
         (v for k, v in request.request_headers.items() if k.lower() == "content-type"), ""
+    ).lower()
+    if "application/x-www-form-urlencoded" in content_type:
+        return "form"
+    if "multipart/form-data" in content_type:
+        return "multipart"
+    return "json"
+
+
+def _templated_like(page_url: str, spec: ToolSpec, sample_url: str) -> str:
+    """Put the spec's placeholders into a page URL: /me/AutoMCP -> /me/{name}."""
+    template_segs = urlparse(spec.url_template).path.split("/")
+    sample_segs = urlparse(sample_url).path.split("/")
+    values = {
+        seg: sample
+        for seg, sample in zip(template_segs, sample_segs)
+        if seg.startswith("{") and seg != sample
+    } if len(template_segs) == len(sample_segs) else {}
+    page = urlparse(page_url)
+    path = "/".join(
+        next((ph for ph, value in values.items() if seg == value), seg)
+        for seg in page.path.split("/")
     )
-    return "form" if "application/x-www-form-urlencoded" in content_type.lower() else "json"
+    return page._replace(path=path).geturl()
+
+
+def _form_csrf(spec: ToolSpec, rep: CapturedRequest) -> tuple[str | None, str | None]:
+    """The form's security-token field, and the page to read a fresh one from."""
+    if spec.body_encoding not in ("form", "multipart") or not rep.request_body:
+        return None, None
+    fields = parse_multipart(rep.request_body) or dict(parse_qsl(rep.request_body))
+    field = next(
+        (f for f in fields
+         if f.lower() in CSRF_FIELD_NAMES or "csrf" in f.lower() or "authenticity" in f.lower()),
+        None,
+    )
+    if field is None:
+        return None, None
+    referer = next((v for k, v in rep.request_headers.items() if k.lower() == "referer"), None)
+    return field, _templated_like(referer, spec, rep.url) if referer else None
+
+
+def _endpoint_key(spec: ToolSpec) -> tuple[str, str]:
+    """Same method and URL shape, whatever the placeholders are called."""
+    return spec.method.upper(), re.sub(r"\{[^}]*\}", "{}", spec.url_template)
 
 
 def _score_quality(spec: ToolSpec) -> QualityScore:
@@ -304,14 +379,17 @@ def _restore_literal_types(spec: ToolSpec, representative: CapturedRequest) -> N
     for field, value in spec.request_mapping.items():
         if not isinstance(value, str) or value.startswith("$"):
             continue
-        if field not in body or isinstance(body[field], str):
+        recorded: Any = body
+        for part in field.split("."):  # "input.isDuplicated" -> body["input"]["isDuplicated"]
+            recorded = recorded.get(part) if isinstance(recorded, dict) else None
+        if recorded is None or isinstance(recorded, str):
             continue
         try:
             parsed = json.loads(value)
         except (json.JSONDecodeError, ValueError):
             continue
-        if parsed == body[field]:
-            spec.request_mapping[field] = body[field]
+        if parsed == recorded:
+            spec.request_mapping[field] = recorded
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +407,10 @@ class ToolSpecBuilder:
         batch_size: int | None = None,
     ) -> None:
         self._provider = provider
-        self._batch_size = max(1, batch_size or settings.analyze_batch_size)
+        default_batch = settings.analyze_batch_size
+        if provider == LLMProvider.GEMINI and "AUTOMCP_ANALYZE_BATCH_SIZE" not in os.environ:
+            default_batch = max(default_batch, GEMINI_BATCH_SIZE)
+        self._batch_size = max(1, batch_size or default_batch)
         configured = settings.llm_model
         if provider == LLMProvider.ANTHROPIC:
             self.model = configured
@@ -352,9 +433,12 @@ class ToolSpecBuilder:
                 api_key=settings.gemini_api_key,
                 # Free-tier keys allow only a few requests per minute, so wait and
                 # retry on 429 instead of failing the whole analysis.
-                http_options=types.HttpOptions(
-                    retry_options=types.HttpRetryOptions(attempts=6, initial_delay=5)
-                ),
+                # Retry outages, but not 429: a per-day quota won't recover in
+                # minutes and every retry uses up more of it (handled below)
+                http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(
+                    attempts=5, initial_delay=5, max_delay=60,
+                    http_status_codes=[408, 500, 502, 503, 504],
+                )),
             )
 
     async def build_specs(
@@ -380,12 +464,30 @@ class ToolSpecBuilder:
             return []
 
         batches = [indexed[i:i + self._batch_size] for i in range(0, len(indexed), self._batch_size)]
-        results = await asyncio.gather(*(self._build_batch(b) for b in batches))
+        # Free tiers allow few requests at once (Gemini answers "high demand"
+        # when flooded), so only a couple of batches run at the same time
+        limit = asyncio.Semaphore(2 if self._provider == LLMProvider.GEMINI else 4)
+
+        async def run(batch: list[tuple[int, EndpointCluster, CapturedRequest]]):
+            async with limit:
+                return await self._build_batch(batch)
+
+        results = await asyncio.gather(*(run(b) for b in batches))
 
         taken = set(taken_names or ())
         inferrer = SchemaInferrer()
+        host_headers = collect_host_headers(list(requests_map.values()))
+        # The model sometimes describes one endpoint twice (e.g. from two
+        # clusters it generalized the same way); keep the most confident
+        pairs = sorted(
+            (pair for batch in results for pair in batch), key=lambda p: -p[1].confidence
+        )
+        seen: set[tuple[str, str]] = set()
         specs: list[ToolSpec] = []
-        for index, spec in (pair for batch in results for pair in batch):
+        for index, spec in pairs:
+            if _endpoint_key(spec) in seen:
+                continue
+            seen.add(_endpoint_key(spec))
             try:
                 spec = normalize_spec(spec, taken)
             except ValueError:
@@ -400,6 +502,12 @@ class ToolSpecBuilder:
                     spec.sample_url = rep.url
                     spec.body_encoding = _body_encoding(rep)  # type: ignore[assignment]
                     _restore_literal_types(spec, rep)
+                    spec.csrf_field, spec.csrf_page = _form_csrf(spec, rep)
+                    if spec.csrf_field:
+                        # Filled in fresh on every call; a recorded token would be stale
+                        spec.request_mapping.pop(spec.csrf_field, None)
+                    host = (urlparse(rep.url).hostname or "").lower()
+                    spec.headers = endpoint_headers(rep, host_headers.get(host, {}))
                 bodies = [
                     requests_map[rid].response_body
                     for rid in cluster.request_ids if rid in requests_map
@@ -513,15 +621,25 @@ class ToolSpecBuilder:
             contents.append(turn("model", retry[0]))
             contents.append(turn("user", self._retry_message(retry[1])))
 
-        response = await self._gemini_client.aio.models.generate_content(
-            model=self.model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                response_json_schema=TOOL_SPECS_SCHEMA,
-            ),
+        from google.genai import errors as genai_errors
+
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            response_json_schema=TOOL_SPECS_SCHEMA,
         )
+        for attempt in range(3):
+            try:
+                response = await self._gemini_client.aio.models.generate_content(
+                    model=self.model, contents=contents, config=config,
+                )
+                break
+            except genai_errors.ClientError as e:
+                message = str(e)
+                per_day = "PerDay" in message or "per day" in message.lower()
+                if e.code != 429 or per_day or attempt == 2:
+                    raise
+                await asyncio.sleep(_retry_seconds(message))  # Per-minute limit: wait it out
         candidates = response.candidates or []
         if candidates and candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
             raise TruncatedResponse()

@@ -91,6 +91,8 @@ automcp analyze <session_id> --allow-host api.partner.com   # keep calls to anot
 
 Filters out noise (analytics, trackers, static assets, page loads, redirects, errors), clusters endpoints by URL pattern, then calls the LLM (Claude, Gemini or OpenAI; see [Multi-model support](#multi-model-support)) to produce structured `ToolSpec` JSON for each endpoint — not raw code. Every provider is held to a fixed JSON schema (structured outputs), so answers can't come back malformed. Endpoints are sent in batches, so large sessions work. Specs are saved to `generated/specs/` and the database.
 
+Requests that are part of logging in (login pages, 2FA polling, anything sending a password) and endpoints that hand out tokens are never turned into tools. Names that vary in addresses become inputs: starring two repos gives one `star_repository(name)` tool, not two.
+
 Only the recorded site's own calls are analyzed (its subdomains count, so `app.example.com` keeps `api.example.com`). Calls to other sites — fonts, chat widgets, payment forms, ads — are skipped, and `analyze` lists the ones it skipped. A call to another site that carries an auth header (a hosted backend like Supabase or Firebase) is kept. If the app's real API lives on another domain, keep it with `--allow-host`.
 
 `--include-pages` keeps full HTML page loads, for server-rendered sites that don't have a JSON API. Re-running `analyze` replaces specs you haven't reviewed yet and keeps the ones you approved.
@@ -134,6 +136,10 @@ automcp serve --transport sse      # legacy SSE at /sse
 ```
 
 Loads all validated tool files via `importlib` and registers them with a FastMCP server. Tools are marked read-only (GET, or marked `readonly` in review) or destructive (DELETE) so MCP clients can ask before risky actions. Every call is logged (see `automcp logs`).
+
+**Calls are sent the way the browser sent them:** JSON (including nested bodies), classic form posts and `multipart/form-data`, with the extra headers the page's own scripts added (like GitHub's `github-verified-fetch`). For classic web forms protected by a one-time security token (Rails `authenticity_token`, Django `csrfmiddlewaretoken`), the tool loads the page the form was on before each call and uses that form's fresh token.
+
+**Large responses are shortened** so one call can't fill the AI's context. A result over 20,000 characters (about 5,000 tokens; change it with `AUTOMCP_MAX_RESPONSE_CHARS`) keeps every field, but long lists show only their first items, long text is cut and deeply nested data is summarized, with a note telling the AI what was left out. For example, pokeapi's 309 KB Pikachu record comes back as 18 KB with its name, types and stats intact. HTML pages come back as their readable text, without markup, scripts or menus.
 
 **Connecting Claude Desktop or Claude Code:** run
 
@@ -297,6 +303,7 @@ generated/
 | `AUTOMCP_ANALYZE_BATCH_SIZE` | `12` | Endpoints sent to the LLM per request |
 | `AUTOMCP_RATE_LIMIT_PER_MINUTE` | `60` | Max tool calls per minute (shared) |
 | `AUTOMCP_AUTO_RELOGIN` | `true` | Renew an expired login in a hidden browser and retry when a tool gets HTTP 401/403 |
+| `AUTOMCP_MAX_RESPONSE_CHARS` | `20000` | Longest tool result sent to the AI; bigger ones are shortened (`0` = no limit) |
 | `AUTOMCP_DB_PATH` | `automcp.db` | SQLite database path |
 | `AUTOMCP_SERVER_HOST` | `127.0.0.1` | MCP server host |
 | `AUTOMCP_SERVER_PORT` | `8000` | MCP server port |

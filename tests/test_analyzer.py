@@ -79,12 +79,12 @@ def test_classifier_blocks_tracker_domains_by_suffix():
 def test_classifier_drops_page_loads_unless_asked():
     reqs = [
         _req("https://x.com/dashboard", resource_type="document"),
-        _req("https://x.com/login", method="POST", resource_type="document"),
+        _req("https://x.com/cards/new", method="POST", resource_type="document"),
         _req("https://x.com/app.js", resource_type="script"),
         _req("https://x.com/api/me"),
     ]
     assert [r.url for r in EventClassifier().classify(reqs)] == [
-        "https://x.com/login", "https://x.com/api/me",
+        "https://x.com/cards/new", "https://x.com/api/me",
     ]
     with_pages = EventClassifier(include_pages=True).classify(reqs)
     assert "https://x.com/dashboard" in [r.url for r in with_pages]
@@ -135,6 +135,22 @@ def test_classifier_counts_sites_the_user_navigated_to_as_first_party():
     ]
     kept = EventClassifier(site_url="https://www.google.com/").classify(reqs)
     assert [r.url for r in kept] == ["https://api.other.com/items"]
+
+
+def test_classifier_drops_login_steps_and_token_endpoints():
+    kept = EventClassifier().classify([
+        _req("https://github.com/sessions/two-factor/mobile_poll", method="POST"),
+        _req("https://github.com/u2f/login_fragment"),
+        _req("https://x.com/api/auth/login", method="POST"),
+        _req("https://github.com/copilot/agent-sessions/token", method="POST"),
+        _req("https://github.com/copilot/agent-sessions/cmc-api-token", method="POST"),
+        _req("https://x.com/api/csrf_token"),
+        _req("https://x.com/api/sessions/42"),       # A resource, not a login step
+        _req("https://x.com/api/token-usage/stats"),  # Not a token endpoint
+    ])
+    assert [r.url for r in kept] == [
+        "https://x.com/api/sessions/42", "https://x.com/api/token-usage/stats",
+    ]
 
 
 def test_classifier_drops_site_internal_files():
@@ -348,3 +364,134 @@ async def test_gemini_retry_sends_bad_answer_back_as_model_turn(monkeypatch):
     retry = fake.calls[1]["contents"]
     assert [c.role for c in retry] == ["user", "model", "user"]
     assert retry[1].parts[0].text == "not json"
+
+
+# ---------------------------------------------------------------- real-site fixes (GitHub)
+
+def test_cluster_turns_varying_names_into_placeholders():
+    reqs = [
+        *(_req(f"https://github.com/me/{repo}/star", method="POST")
+          for repo in ("AutoMCP", "Resume-Analyzer")),
+        *(_req(f"https://github.com/me/{repo}/graphs/participation")
+          for repo in ("server", "cudf", "recipes", "notchprompt")),
+        _req("https://github.com/me/AutoMCP/issues"),
+        _req("https://github.com/me/AutoMCP/pulls"),       # Last segment: separate endpoints
+        _req("https://github.com/me/AutoMCP/branch-infobar/main"),
+        _req("https://github.com/me/AutoMCP/overview-files/main"),  # Route words, not names
+        _req("https://x.com/api/v1/users"),
+        _req("https://x.com/api/v2/users"),                 # API versions stay apart
+        _req("https://api.x.com/api/v1/users"),             # Other host: other endpoint
+    ]
+    templates = sorted((c.method, c.url_template) for c in EndpointClusterer().cluster(reqs))
+    assert templates == sorted([
+        ("POST", "https://github.com/me/{name}/star"),
+        ("GET", "https://github.com/me/{name}/graphs/participation"),
+        ("GET", "https://github.com/me/AutoMCP/issues"),
+        ("GET", "https://github.com/me/AutoMCP/pulls"),
+        ("GET", "https://github.com/me/AutoMCP/branch-infobar/main"),
+        ("GET", "https://github.com/me/AutoMCP/overview-files/main"),
+        ("GET", "https://x.com/api/v1/users"),
+        ("GET", "https://x.com/api/v2/users"),
+        ("GET", "https://api.x.com/api/v1/users"),
+    ])
+
+
+def test_classifier_keeps_form_posts_that_redirect_but_never_logins():
+    kept = EventClassifier().classify([
+        _req("https://github.com/me/repo/pull/create", method="POST", status=302,
+             request_body="authenticity_token=x&pull_request%5Btitle%5D=Hi"),
+        _req("https://github.com/session", method="POST", status=302,
+             request_body="login=me&password=secret"),
+        _req("https://x.com/old-page", status=301),
+        _req("https://x.com/api/boards/9", status=404),
+        _req("https://x.com/assets/opt-in.specrule-0a0e9d38bd18.json"),
+    ])
+    assert [r.url for r in kept] == ["https://github.com/me/repo/pull/create"]
+
+
+def test_multipart_bodies_are_redacted_and_replayed_as_multipart():
+    body = (
+        "------B\r\nContent-Disposition: form-data; name=\"authenticity_token\"\r\n\r\nsecret123\r\n"
+        "------B\r\nContent-Disposition: form-data; name=\"context\"\r\n\r\nrepository\r\n------B--\r\n"
+    )
+    assert json.loads(redact_body(body)) == {
+        "multipart_form_fields": {"authenticity_token": "<redacted>", "context": "repository"}
+    }
+
+
+async def test_specs_keep_endpoint_headers_and_drop_duplicates():
+    def post(repo):
+        return _req(
+            f"https://github.com/me/{repo}/star", method="POST",
+            request_headers={
+                "content-type": "multipart/form-data; boundary=x", "origin": "https://github.com",
+                "github-verified-fetch": "true", "x-fetch-nonce": "n1", "cookie": "s=1",
+                "x-csrf-token": "t", "sec-fetch-mode": "cors", ":path": "/x",
+            },
+        )
+    # Two clusters (different hosts would never merge) that the model describes identically
+    reqs = [post("AutoMCP"), _req("https://github.com/me/AutoMCP/star2", method="POST",
+                                   request_headers={"x-fetch-nonce": "n1"})]
+    # Ordinary page calls, so only x-fetch-nonce is common to most calls to the host
+    others = [_req(f"https://github.com/me/page{i}", request_headers={"x-fetch-nonce": "n1"})
+              for i in range(3)]
+    clusters = EndpointClusterer().cluster(reqs)
+
+    def respond(cs):
+        return json.dumps({"specs": [
+            {**_spec_for(c), "tool_name": "star_repo",
+             "confidence": 0.9 if c["url_template"].endswith("/star") else 0.6,
+             "url_template": "https://github.com/me/{repo}/star"} for c in cs
+        ]}), "end_turn"
+
+    specs = await ToolSpecBuilder(client=FakeAnthropic(respond)).build_specs(
+        clusters, {r.id: r for r in reqs + others}, "s"
+    )
+    assert [s.tool_name for s in specs] == ["star_repo"]  # One spec, not star_repo + star_repo_2
+    assert specs[0].sample_url == reqs[0].url  # The more confident duplicate wins
+    assert specs[0].body_encoding == "multipart"
+    # Host-wide (x-fetch-nonce), auth, cookie, CSRF and browser headers are left out
+    assert specs[0].headers == {"origin": "https://github.com", "github-verified-fetch": "true"}
+
+
+def test_placeholders_are_named_after_plural_collections():
+    reqs = [_req(f"https://x.com/repos/{r}/star", method="POST") for r in ("Alpha1", "Beta2")]
+    assert [c.url_template for c in EndpointClusterer().cluster(reqs)] == ["https://x.com/repos/{repo}/star"]
+
+
+async def test_gemini_daily_quota_is_not_retried_but_minute_limits_are(monkeypatch):
+    errors = pytest.importorskip("google.genai.errors")
+    types = pytest.importorskip("google.genai.types")
+    import core.analyzer.tool_spec_builder as tsb
+
+    async def no_wait(_seconds):
+        return None
+
+    monkeypatch.setattr(tsb.asyncio, "sleep", no_wait)
+    clusters, reqs = _clusters(1)
+
+    def quota_error(kind):
+        return errors.ClientError(429, {"error": {
+            "code": 429, "status": "RESOURCE_EXHAUSTED",
+            "message": f"Quota exceeded for metric: generate_content_free_tier_requests{kind}",
+        }})
+
+    answers = iter([quota_error("PerMinute"), None])
+
+    def per_minute(cs):
+        answer = next(answers)
+        if answer:
+            raise answer
+        return json.dumps({"specs": [_spec_for(c) for c in cs]}), types.FinishReason.STOP
+
+    builder, fake = _gemini_builder(monkeypatch, per_minute)
+    assert len(await builder.build_specs(clusters, reqs, "s")) == 1
+    assert len(fake.calls) == 2  # Waited and tried again
+
+    def per_day(cs):
+        raise quota_error("PerDay")
+
+    builder, fake = _gemini_builder(monkeypatch, per_day)
+    with pytest.raises(errors.ClientError):
+        await builder.build_specs(clusters, reqs, "s")
+    assert len(fake.calls) == 1  # No retries that would use up more of the quota
