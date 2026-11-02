@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -19,7 +20,6 @@ from core.recorder.network_capture import NetworkCapture
 from core.storage.db import get_db
 from core.storage.models import CapturedRequest, RecordingSession, utcnow
 
-console = Console()
 
 SNAPSHOT_INTERVAL_SECONDS = 3.0
 MAX_STORAGE_VALUE_CHARS = 8192
@@ -28,6 +28,31 @@ _READ_STORAGE_JS = """() => ({
     local: Object.fromEntries(Object.entries(localStorage)),
     session: Object.fromEntries(Object.entries(sessionStorage)),
 })"""
+
+# Puts saved localStorage/sessionStorage back before the site's own scripts run.
+# Only fills keys that are missing, so values the site updates are kept.
+_RESTORE_STORAGE_JS = """(([origin, data]) => {
+    if (location.origin !== origin) return;
+    try {
+        for (const [kind, store] of [["local", localStorage], ["session", sessionStorage]]) {
+            for (const [key, value] of Object.entries(data[kind] || {})) {
+                if (store.getItem(key) === null) store.setItem(key, value);
+            }
+        }
+    } catch (e) {}
+})(%s)"""
+
+USERNAME_SELECTORS = ", ".join([
+    'input[autocomplete="username"]',
+    'input[type="email"]',
+    'input[name*="user" i]',
+    'input[name*="email" i]',
+    'input[name*="login" i]',
+    'input[id*="user" i]',
+    'input[id*="email" i]',
+    'input[type="text"]',
+])
+PASSWORD_SELECTOR = 'input[type="password"]'
 
 
 def _origin(url: str) -> str:
@@ -45,7 +70,8 @@ class BrowserSession:
             await session.wait_until_closed()
 
     With refresh_session_id set, nothing new is saved except fresh auth state
-    (cookies, headers, storage) for that existing session.
+    (cookies, headers, storage) for that existing session. Add restore_state to
+    start from that session's saved login instead of an empty browser.
     """
 
     def __init__(
@@ -55,12 +81,18 @@ class BrowserSession:
         user_data_dir: str | None = None,
         project_id: str | None = None,
         refresh_session_id: str | None = None,
+        restore_state: dict[str, Any] | None = None,
+        quiet: bool = False,
     ) -> None:
         self._url = url
         self._headless = headless
         self._user_data_dir = user_data_dir
         self._project_id = project_id
         self._refresh_session_id = refresh_session_id
+        # Saved login (cookies, storage) to load before the first page opens
+        self._restore_state = restore_state
+        # Quiet mode prints nothing, for use inside the MCP server (stdout is the protocol)
+        self._console = Console(quiet=quiet)
 
         self._session_id: str = refresh_session_id or str(uuid.uuid4())
         self._started_at: datetime = utcnow()
@@ -112,6 +144,9 @@ class BrowserSession:
             )
         self._context.on("close", lambda _: self._closed.set())
 
+        if self._restore_state:
+            await self._restore_login(self._restore_state)
+
         await self._capture.start(self._context)
 
         page = await self._context.new_page()
@@ -119,7 +154,7 @@ class BrowserSession:
             await page.goto(self._url, wait_until="domcontentloaded", timeout=30_000)
         except Exception as e:
             # Keep recording: the user can still navigate manually
-            console.print(f"[yellow]Warning:[/] initial page load did not finish: {e}")
+            self._console.print(f"[yellow]Warning:[/] initial page load did not finish: {e}")
 
         if not self._refresh_session_id:
             self._session = RecordingSession(
@@ -134,7 +169,7 @@ class BrowserSession:
         self._snapshot_task = asyncio.create_task(self._snapshot_loop())
 
         what = "auth refresh" if self._refresh_session_id else "recording"
-        console.print(
+        self._console.print(
             f"[bold green]AutoMCP[/] {what} started — session [cyan]{self._session_id[:8]}[/]\n"
             "Interact with the browser. Close the browser window or press "
             "[bold]Ctrl+C[/] in the terminal to stop."
@@ -147,6 +182,105 @@ class BrowserSession:
             if self._context is not None and not self._context.pages:
                 return
             await asyncio.sleep(0.5)
+
+    # ------------------------------------------------------------------
+    # Unattended use (automatic login renewal)
+    # ------------------------------------------------------------------
+
+    def _page(self):
+        if self._context is None or not self._context.pages:
+            raise RuntimeError("The browser has no open page")
+        return self._context.pages[0]
+
+    async def settle(self, timeout_ms: int = 15_000) -> None:
+        """Wait for the page to finish loading so the site can renew its session."""
+        try:
+            await self._page().wait_for_load_state("networkidle", timeout=timeout_ms)
+        except Exception:
+            pass  # Sites that poll never go idle; what loaded so far is enough
+        await asyncio.sleep(1.0)  # Let scripts store fresh tokens
+        await self._snapshot_auth()
+
+    async def log_in(
+        self,
+        username: str | None,
+        password: str,
+        login_url: str | None = None,
+        username_selector: str | None = None,
+        password_selector: str | None = None,
+        timeout_ms: int = 10_000,
+    ) -> bool:
+        """Open the login page (or use the current page) and submit the login form.
+
+        Handles forms that ask for the username first and the password on a
+        second step. Returns False if no password field shows up, which also
+        happens when the saved cookies were still good and the site skipped
+        the login page.
+        """
+        page = self._page()
+        password_field = page.locator(password_selector or PASSWORD_SELECTOR).first
+        user_field = page.locator(username_selector or USERNAME_SELECTORS).first
+        try:
+            if login_url:
+                await page.goto(login_url, wait_until="domcontentloaded", timeout=30_000)
+            else:
+                await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        except Exception:
+            pass
+
+        if username and await user_field.count() and await user_field.is_visible():
+            await user_field.fill(username)
+            if not await password_field.is_visible():
+                await user_field.press("Enter")  # Two-step login: username first
+        try:
+            await password_field.wait_for(state="visible", timeout=timeout_ms)
+        except Exception:
+            return False
+        await password_field.fill(password)
+        await password_field.press("Enter")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        except Exception:
+            pass
+        return True
+
+    async def _restore_login(self, state: dict[str, Any]) -> None:
+        """Load a saved session's cookies and storage into the new browser."""
+        assert self._context is not None
+        cookies: list[dict[str, Any]] = []
+        for c in state.get("cookie_jar") or []:
+            if not c.get("name") or not c.get("domain"):
+                continue
+            cookie = {
+                "name": c["name"], "value": c.get("value") or "",
+                "domain": c["domain"], "path": c.get("path") or "/",
+                "secure": bool(c.get("secure")),
+            }
+            if isinstance(c.get("expires"), (int, float)):
+                cookie["expires"] = c["expires"]
+            cookies.append(cookie)
+        if not cookies:
+            # Older sessions only kept a flat name -> value map for the site
+            cookies = [
+                {"name": k, "value": v, "url": _origin(self._url)}
+                for k, v in (state.get("cookies") or {}).items()
+            ]
+        for cookie in cookies:
+            try:
+                await self._context.add_cookies([cookie])
+            except Exception:
+                pass  # Skip a malformed cookie rather than losing the rest
+
+        storage = {
+            "local": state.get("local_storage") or {},
+            "session": state.get("session_storage") or {},
+        }
+        if storage["local"] or storage["session"]:
+            # Storage was saved for the recorded site's origin
+            origin = state.get("storage_origin") or _origin(self._url)
+            await self._context.add_init_script(
+                script=_RESTORE_STORAGE_JS % json.dumps([origin, storage])
+            )
 
     async def __aexit__(
         self,
@@ -232,7 +366,7 @@ class BrowserSession:
         if not jar:
             jar = self._cookies_from_requests()
             if jar:
-                console.print("[dim]Cookies rebuilt from captured request headers.[/]")
+                self._console.print("[dim]Cookies rebuilt from captured request headers.[/]")
 
         slim_jar = [
             {k: c.get(k) for k in ("name", "value", "domain", "path", "expires", "secure")}
@@ -265,6 +399,7 @@ class BrowserSession:
                 session_storage=storage.get("session", {}),
                 origin=_origin(self._url),
             )
+            state["storage_origin"] = snapshot.origin
             state["local_storage"] = snapshot.local_storage
             state["session_storage"] = snapshot.session_storage
             state["auth_token_keys"] = StorageTokenExtractor().detect_auth_tokens(snapshot)
@@ -283,7 +418,7 @@ class BrowserSession:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
-            console=console,
+            console=self._console,
             transient=True,
         ) as progress:
             progress.add_task(
@@ -297,7 +432,7 @@ class BrowserSession:
                     await db.save_session(self._session)
                 await db.save_requests(self._captured_requests)
 
-        console.print(
+        self._console.print(
             f"[green]Saved[/] {len(self._captured_requests)} requests for session "
             f"[cyan]{self._session_id[:8]}[/]"
         )
@@ -308,12 +443,13 @@ class BrowserSession:
             existing = await db.get_session(self._refresh_session_id or "")
             old_state = existing.browser_context_state if existing else {}
             merged = {**old_state, **self._auth_state}
-            merged["host_headers"] = {
-                **(old_state.get("host_headers") or {}),
-                **(self._auth_state.get("host_headers") or {}),
-            }
+            # Merge per header: a short refresh visit may not repeat every header
+            host_headers = {h: dict(v) for h, v in (old_state.get("host_headers") or {}).items()}
+            for host, headers in (self._auth_state.get("host_headers") or {}).items():
+                host_headers.setdefault(host, {}).update(headers)
+            merged["host_headers"] = host_headers
             await db.update_session_auth(self._session_id, merged)
-        console.print(
+        self._console.print(
             f"[green]Updated[/] login for session [cyan]{self._session_id[:8]}[/] "
             f"({len(self._auth_state.get('cookie_jar', []))} cookies)"
         )

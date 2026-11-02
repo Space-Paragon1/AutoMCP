@@ -86,9 +86,12 @@ automcp analyze <session_id>
 automcp analyze <session_id> --min-confidence 0.7
 automcp analyze <session_id> --output my_specs.json
 automcp analyze <session_id> --include-pages   # also use HTML page loads
+automcp analyze <session_id> --allow-host api.partner.com   # keep calls to another site
 ```
 
-Filters out noise (analytics, trackers, static assets, page loads, redirects, errors), clusters endpoints by URL pattern, then calls the LLM (Claude, Gemini or OpenAI; see [Multi-model support](#multi-model-support)) to produce structured `ToolSpec` JSON for each endpoint — not raw code. Endpoints are sent in batches, so large sessions work. Specs are saved to `generated/specs/` and the database.
+Filters out noise (analytics, trackers, static assets, page loads, redirects, errors), clusters endpoints by URL pattern, then calls the LLM (Claude, Gemini or OpenAI; see [Multi-model support](#multi-model-support)) to produce structured `ToolSpec` JSON for each endpoint — not raw code. Every provider is held to a fixed JSON schema (structured outputs), so answers can't come back malformed. Endpoints are sent in batches, so large sessions work. Specs are saved to `generated/specs/` and the database.
+
+Only the recorded site's own calls are analyzed (its subdomains count, so `app.example.com` keeps `api.example.com`). Calls to other sites — fonts, chat widgets, payment forms, ads — are skipped, and `analyze` lists the ones it skipped. A call to another site that carries an auth header (a hosted backend like Supabase or Firebase) is kept. If the app's real API lives on another domain, keep it with `--allow-host`.
 
 `--include-pages` keeps full HTML page loads, for server-rendered sites that don't have a JSON API. Re-running `analyze` replaces specs you haven't reviewed yet and keeps the ones you approved.
 
@@ -161,12 +164,14 @@ automcp ui --port 7860
 
 Starts a dark-theme dashboard on your computer. The browser doesn't open by itself: once the terminal shows `AutoMCP Dashboard → http://127.0.0.1:7860`, open that address in your web browser. Keep the terminal open while you use it, and press **Ctrl+C** there to stop it. If the port is taken, run `automcp ui --port 7861` and open that port instead.
 
-The dashboard shows:
-- Sessions browser
-- Specs table with inline approve/read-only toggles
-- Tools viewer with syntax-highlighted source code
-- Execution log with success rate and duration stats
-- Projects overview
+What you can do there:
+- **Sessions:** click one to see only its specs
+- **Specs:** approve specs or mark them read-only, then press **Generate tools** to write the tool files (the same as `automcp generate`)
+- **Tools:** click a tool to fill in its inputs and **Run** it with your recorded login, and to read its source code. Tools that change data (POST, PUT, DELETE) ask before sending.
+- **Executions:** every tool run, with success rate and duration
+- **Projects:** sessions grouped by project
+
+The dashboard only answers requests addressed to this computer, and only accepts changes from its own page, so other websites you visit can't use it to run your tools.
 
 ---
 
@@ -208,7 +213,22 @@ automcp auth-check <session_id>
 automcp auth-check <session_id> --probe https://trello.com/1/members/me
 ```
 
-### Refresh expired credentials
+### Automatic renewal
+When a tool gets HTTP 401 or 403 (logged out), AutoMCP renews the login in a hidden browser and retries the call once:
+
+1. It opens the site with the session's saved cookies and storage. Many sites keep a long-lived "remember me" cookie and hand out a fresh session on page load, so this alone often works.
+2. If you saved a password with `auth-login` (below), it also fills in the site's login form.
+
+Calls that fail at the same moment share one renewal, and a session is renewed at most once every 2 minutes. Turn it off with `AUTOMCP_AUTO_RELOGIN=false`. Run a renewal by hand with `automcp auth-refresh <session_id> --auto`.
+
+### Save a login so it renews by itself
+```bash
+automcp auth-login <session_id> --login-url https://example.com/login --username me@example.com
+automcp auth-login <session_id> --clear          # forget it
+```
+Asks for the password, stores it encrypted in the local vault, and tries a renewal straight away to check it works. The login form's fields are found automatically, including forms that ask for the username and password on separate pages; pass `--username-selector` / `--password-selector` (CSS selectors) if they aren't. Logins that need a one-time code, captcha or passkey can't be automated — use `auth-refresh` for those.
+
+### Log in again yourself
 ```bash
 automcp auth-refresh <session_id>
 ```
@@ -243,7 +263,7 @@ core/
   runtime/        Request executor, retry/rate limiting, importlib loader, FastMCP server
   storage/        Pydantic v2 models, aiosqlite database
 
-tests/            pytest suite (analysis, codegen safety, runtime, dashboard)
+tests/            pytest suite (analysis, codegen safety, runtime, login renewal, dashboard)
 
 apps/
   cli/            Typer CLI (record, analyze, review, generate, serve, test, ui, ...)
@@ -276,6 +296,7 @@ generated/
 | `AUTOMCP_LLM_MODEL` | `claude-opus-5-5` | Model for analysis |
 | `AUTOMCP_ANALYZE_BATCH_SIZE` | `12` | Endpoints sent to the LLM per request |
 | `AUTOMCP_RATE_LIMIT_PER_MINUTE` | `60` | Max tool calls per minute (shared) |
+| `AUTOMCP_AUTO_RELOGIN` | `true` | Renew an expired login in a hidden browser and retry when a tool gets HTTP 401/403 |
 | `AUTOMCP_DB_PATH` | `automcp.db` | SQLite database path |
 | `AUTOMCP_SERVER_HOST` | `127.0.0.1` | MCP server host |
 | `AUTOMCP_SERVER_PORT` | `8000` | MCP server port |

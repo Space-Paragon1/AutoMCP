@@ -6,10 +6,12 @@ every tool without regenerating it, and the generated files stay small.
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import quote
 
@@ -25,6 +27,9 @@ AUTH_CACHE_SECONDS = 30.0
 
 # Tests can point this at an httpx.MockTransport
 _transport: httpx.AsyncBaseTransport | None = None
+# Renews an expired login, returning True if it saved a fresh one. Defaults to
+# core.auth.relogin.renew_login; tests swap in a fake.
+_renew_login: Callable[[str], Awaitable[bool]] | None = None
 
 _rate_limiter = RateLimiter(calls_per_minute=settings.rate_limit_per_minute)
 _auth_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -89,6 +94,35 @@ def clear_auth_cache() -> None:
     _auth_cache.clear()
 
 
+async def _try_renew_login(session_id: str | None) -> bool:
+    if not session_id or not settings.auto_relogin:
+        return False
+    renew = _renew_login
+    if renew is None:
+        from core.auth.relogin import renew_login as renew
+    renewed = await renew(session_id)
+    if renewed:
+        _auth_cache.pop(session_id, None)
+    return renewed
+
+
+def _auth_error(status: int, session_id: str | None, renew_tried: bool) -> ToolError:
+    short = (session_id or "")[:8]
+    if renew_tried:
+        message = (
+            f"Authentication failed (HTTP {status}), even after AutoMCP renewed the login "
+            f"in the background. Log in again with: automcp auth-refresh {short} "
+            f"(or save a login with automcp auth-login {short} so AutoMCP can sign in "
+            "by itself)"
+        )
+    else:
+        message = (
+            f"Authentication failed (HTTP {status}). The recorded login may have expired. "
+            f"Refresh it with: automcp auth-refresh {short}"
+        )
+    return ToolError(message, status_code=status, retryable=False)
+
+
 def _parse_response(response: httpx.Response, response_type: str) -> Any:
     if not response.content:
         return {"status": response.status_code, "ok": True}
@@ -115,39 +149,42 @@ async def _send(spec: dict[str, Any], args: dict[str, Any]) -> Any:
     payload = build_payload(spec, args)
     session_id = spec.get("session_id")
 
-    headers = build_request_headers(await load_auth_state(session_id), url)
-    headers.setdefault(
-        "accept", "application/json" if spec.get("response_type") == "json" else "*/*"
-    )
-
-    request_kwargs: dict[str, Any] = {"headers": headers}
+    body_kwargs: dict[str, Any] = {}
     if method in ("GET", "DELETE", "HEAD"):
         if payload:
-            request_kwargs["params"] = payload
+            body_kwargs["params"] = payload
     elif payload:
         if spec.get("body_encoding") == "form":
-            request_kwargs["data"] = payload
+            body_kwargs["data"] = payload
         else:
-            request_kwargs["json"] = payload
+            body_kwargs["json"] = payload
 
-    async def _call() -> Any:
+    async def _call(headers: dict[str, str]) -> httpx.Response:
         async with httpx.AsyncClient(
             timeout=30.0, follow_redirects=True, transport=_transport
         ) as client:
-            response = await client.request(method, url, **request_kwargs)
-        if response.status_code in (401, 403):
-            short = (session_id or "")[:8]
-            raise ToolError(
-                f"Authentication failed (HTTP {response.status_code}). The recorded login "
-                f"may have expired. Refresh it with: automcp auth-refresh {short}",
-                status_code=response.status_code,
-                retryable=False,
-            )
-        response.raise_for_status()
-        return _parse_response(response, spec.get("response_type", "json"))
+            response = await client.request(method, url, headers=headers, **body_kwargs)
+        if response.status_code not in (401, 403):
+            response.raise_for_status()  # 429/5xx are retried by with_retry
+        return response
 
-    await _rate_limiter.acquire()
-    return await with_retry(_call, RetryConfig(max_attempts=3))
+    renew_tried = False
+    while True:
+        headers = build_request_headers(await load_auth_state(session_id), url)
+        headers.setdefault(
+            "accept", "application/json" if spec.get("response_type") == "json" else "*/*"
+        )
+        await _rate_limiter.acquire()
+        response = await with_retry(functools.partial(_call, headers), RetryConfig(max_attempts=3))
+        if response.status_code not in (401, 403):
+            return _parse_response(response, spec.get("response_type", "json"))
+        # Logged out: renew the login once in the background, then try again
+        if not renew_tried:
+            renew_tried = True
+            if await _try_renew_login(session_id):
+                continue
+            raise _auth_error(response.status_code, session_id, renew_tried=False)
+        raise _auth_error(response.status_code, session_id, renew_tried=True)
 
 
 async def _log(tool_name: str, args: dict[str, Any], started: float,

@@ -1,21 +1,53 @@
 """AutoMCP 2.0 Web Dashboard."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
 from core.codegen.naming import is_safe_identifier, to_snake_case
 from core.config import settings
+from core.runtime.inputs import coerce_input
+from core.runtime.tool_loader import ToolLoader
 from core.storage.db import get_db
 
 BASE_DIR = Path(__file__).parent
 
 app_web = FastAPI(title="AutoMCP Dashboard")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+_loader = ToolLoader()
+
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+# Set by run_dashboard; "0.0.0.0" means the user chose to serve their network
+_bind_host = "127.0.0.1"
+
+
+@app_web.middleware("http")
+async def only_this_dashboard(request: Request, call_next):
+    """Refuse requests that other websites make through the user's browser.
+
+    The dashboard can run tools with the user's saved logins. It only answers
+    requests addressed to this machine (stops DNS rebinding), and changes must
+    be JSON from the dashboard's own page (stops cross-site form posts).
+    """
+    host_header = request.headers.get("host", "")
+    hostname = urlparse("//" + host_header).hostname or ""
+    if _bind_host not in ("0.0.0.0", "::") and hostname not in LOCAL_HOSTS | {_bind_host}:
+        return JSONResponse({"detail": "Unknown host"}, status_code=403)
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).netloc != host_header:
+            return JSONResponse({"detail": "Cross-site request refused"}, status_code=403)
+        if not request.headers.get("content-type", "").startswith("application/json"):
+            return JSONResponse({"detail": "Send JSON"}, status_code=415)
+    return await call_next(request)
 
 
 @app_web.get("/", response_class=HTMLResponse)
@@ -38,7 +70,6 @@ async def dashboard(request: Request):
         projects = await db.get_projects()
         all_specs = await db.get_tool_specs()
         all_tools = await db.get_generated_tools()
-        executions = await db.get_executions(limit=10)
 
     return templates.TemplateResponse(request, "dashboard.html", {
         "sessions": sessions_raw,
@@ -92,7 +123,93 @@ async def api_tools():
     db = get_db()
     async with db:
         tools = await db.get_generated_tools()
-    return [t.model_dump(mode="json") for t in tools]
+        specs = {s.spec_id: s for s in await db.get_tool_specs()}
+    out = []
+    for tool in tools:
+        item = tool.model_dump(mode="json")
+        spec = specs.get(tool.spec_id)
+        if spec:
+            # What the dashboard needs to show a "try it" form
+            item.update(
+                method=spec.method,
+                url_template=spec.url_template,
+                purpose=spec.purpose,
+                session_id=spec.session_id,
+                inputs=[i.model_dump() for i in spec.inputs],
+            )
+        out.append(item)
+    return out
+
+
+class GenerateRequest(BaseModel):
+    session_id: str | None = None
+
+
+@app_web.post("/api/generate")
+async def api_generate(body: GenerateRequest):
+    """Write tool files for approved specs (one session, or all of them)."""
+    from core.codegen.pipeline import generate_tools
+
+    db = get_db()
+    async with db:
+        specs = await db.get_tool_specs(session_id=body.session_id)
+    approved = [s for s in specs if s.approved]
+    if not approved:
+        raise HTTPException(status_code=400, detail="No approved specs. Approve some first.")
+    records = await generate_tools(approved)
+    return {
+        "total": len(records),
+        "valid": sum(r.validation_status == "valid" for r in records),
+        "tools": [
+            {"tool_name": r.tool_name, "valid": r.validation_status == "valid",
+             "errors": r.validation_errors}
+            for r in records
+        ],
+    }
+
+
+class RunRequest(BaseModel):
+    inputs: dict[str, Any] = Field(default_factory=dict)
+
+
+@app_web.post("/api/tools/{tool_name}/run")
+async def api_run_tool(tool_name: str, body: RunRequest):
+    """Call a generated tool with the given inputs, like an AI agent would."""
+    if not is_safe_identifier(tool_name):
+        raise HTTPException(status_code=400, detail="Invalid tool name")
+    db = get_db()
+    async with db:
+        tools = await db.get_generated_tools()
+        latest = max(
+            (t for t in tools if t.tool_name == tool_name and t.validation_status == "valid"),
+            key=lambda t: t.generated_at, default=None,
+        )
+        spec = await db.get_tool_spec(latest.spec_id) if latest else None
+    if latest is None or spec is None or not Path(latest.file_path).exists():
+        raise HTTPException(status_code=404, detail="No valid tool with that name. Generate it first.")
+
+    kwargs: dict[str, Any] = {}
+    problems: list[str] = []
+    for inp in spec.inputs:
+        value = body.inputs.get(inp.name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            if inp.required:
+                problems.append(f"{inp.name} is required")
+            continue
+        try:
+            kwargs[inp.name] = coerce_input(value, inp.type) if isinstance(value, str) else value
+        except ValueError as e:
+            problems.append(f"{inp.name}: {e}")
+    if problems:
+        raise HTTPException(status_code=400, detail="; ".join(problems))
+
+    fn = _loader.load_and_get(Path(latest.file_path), tool_name)
+    started = time.monotonic()
+    try:
+        result = await fn(**kwargs)
+    except Exception as e:  # The tool's own error (HTTP failure, expired login) is the answer
+        return {"ok": False, "error": str(e), "duration_ms": (time.monotonic() - started) * 1000}
+    return {"ok": True, "result": result, "duration_ms": (time.monotonic() - started) * 1000}
 
 
 @app_web.get("/api/tools/{tool_name}/source")
@@ -122,4 +239,6 @@ async def api_projects():
 
 
 def run_dashboard(host: str = "127.0.0.1", port: int = 7860):
+    global _bind_host
+    _bind_host = host
     uvicorn.run(app_web, host=host, port=port, log_level="warning")

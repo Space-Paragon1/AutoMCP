@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     analyze_batch_size: int = Field(default=12)
     max_concurrent_requests: int = Field(default=10)
     rate_limit_per_minute: int = Field(default=60)
+    # When a tool gets HTTP 401/403, renew the login in a hidden browser and retry once
+    auto_relogin: bool = Field(default=True)
     log_level: str = Field(default="INFO")
     server_host: str = Field(default="127.0.0.1")
     server_port: int = Field(default=8000)
