@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AutoMCP 2.0 CLI — Browser-to-MCP tool generator."""
+"""AutoMCP CLI — Browser-to-MCP tool generator."""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 
 import typer
-from rich import print as rprint
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -16,7 +15,7 @@ from core.config import settings
 
 app = typer.Typer(
     name="automcp",
-    help="AutoMCP 2.0 — Record browser sessions and generate MCP tools",
+    help="AutoMCP — Record browser sessions and generate MCP tools",
     no_args_is_help=True,
 )
 console = Console()
@@ -34,62 +33,52 @@ def record(
     project: str = typer.Option(None, "--project", "-p", help="Project name"),
 ) -> None:
     """Record network traffic from a browser session."""
-    asyncio.run(_record(url, headless, project))
+    try:
+        asyncio.run(_record(url, headless, project))
+    except KeyboardInterrupt:
+        pass  # _record already saved and reported; don't print a traceback
 
 
 async def _record(url: str, headless: bool, project: str | None = None) -> None:
     from core.recorder.browser_session import BrowserSession
+    from core.storage.db import get_db
 
     console.print(
         Panel(
             f"[bold]Recording session[/]\nURL: [cyan]{url}[/]\n\n"
             "Interact with the browser, then close the window or press "
             "[bold]Ctrl+C[/] to stop.",
-            title="AutoMCP 2.0 — Record",
+            title="AutoMCP — Record",
         )
     )
 
     project_id = None
     if project:
-        from core.storage.db import get_db as _get_db
-        _db = _get_db()
-        async with _db:
-            proj = await _db.get_project_by_name(project)
-            if proj is None:
-                console.print(f"[red]Project '{project}' not found.[/] Run automcp project-create {project}")
-                raise typer.Exit(1)
-            project_id = proj.id
+        async with get_db() as db:
+            proj = await db.get_project_by_name(project)
+        if proj is None:
+            console.print(f"[red]Project '{project}' not found.[/] Run automcp project-create {project}")
+            raise typer.Exit(1)
+        project_id = proj.id
 
+    session_id: str | None = None
     try:
         async with BrowserSession(url=url, headless=headless, project_id=project_id) as session:
-            # Keep alive until the browser window is closed
-            while True:
-                await asyncio.sleep(1)
-    except KeyboardInterrupt:
+            session_id = session.session_id
+            await session.wait_until_closed()
+    except asyncio.CancelledError:
+        # Ctrl+C: BrowserSession.__aexit__ has already saved what was captured
         console.print("\n[yellow]Recording stopped by user[/]")
-        return
     except Exception as e:
-        # BrowserSession.__aexit__ already handled persistence
-        if "Target page, context or browser has been closed" in str(e):
-            pass  # Normal: user closed the browser
-        else:
-            console.print(f"[red]Error:[/] {e}")
-            return
+        console.print(f"[red]Error:[/] {e}")
+        if session_id is None:
+            raise typer.Exit(1)
 
-    # Retrieve what was saved
-    from core.storage.db import get_db
-
-    db = get_db()
-    async with db:
-        # We can only get the session_id from the session that was just used;
-        # retrieve the session saved to find the id.
-        # Since BrowserSession persists on __aexit__, we need the id from it.
-        pass
-
-    console.print(
-        "\nRun [bold]automcp analyze <session_id>[/] to generate tool specs.\n"
-        "Find session IDs with [bold]automcp sessions[/]."
-    )
+    if session_id:
+        short = session_id[:8]
+        console.print(
+            f"\nNext: [bold]automcp analyze {short}[/] to generate tool specs."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -104,41 +93,88 @@ def analyze(
     min_confidence: float = typer.Option(
         None, "--min-confidence", help="Minimum confidence threshold"
     ),
-    provider: str = typer.Option("anthropic", "--provider", help="LLM provider: anthropic, openai, gemini"),
+    provider: str = typer.Option(
+        None, "--provider",
+        help="LLM provider: anthropic, openai, gemini (default: AUTOMCP_LLM_PROVIDER)",
+    ),
+    include_pages: bool = typer.Option(
+        False, "--include-pages",
+        help="Also analyze full HTML page loads (for server-rendered sites without a JSON API)",
+    ),
 ) -> None:
     """Analyze captured requests and generate tool specs."""
-    asyncio.run(_analyze(session_id, output, min_confidence, provider))
+    asyncio.run(_analyze(session_id, output, min_confidence, provider, include_pages))
+
+
+_PROVIDER_KEYS = {
+    "anthropic": ("anthropic_api_key", "AUTOMCP_ANTHROPIC_API_KEY"),
+    "openai": ("openai_api_key", "AUTOMCP_OPENAI_API_KEY"),
+    "gemini": ("gemini_api_key", "AUTOMCP_GEMINI_API_KEY"),
+}
+
+
+def _is_provider_error(error: Exception) -> bool:
+    """True for errors returned by an LLM provider's API (auth, quota, bad model)."""
+    import anthropic
+
+    if isinstance(error, anthropic.APIError):
+        return True
+    try:
+        from google.genai import errors as genai_errors
+        if isinstance(error, genai_errors.APIError):
+            return True
+    except ImportError:
+        pass
+    try:
+        import openai
+        if isinstance(error, openai.APIError):
+            return True
+    except ImportError:
+        pass
+    return False
 
 
 async def _analyze(
     session_id: str,
     output: Path | None,
     min_confidence: float | None,
-    provider: str = "anthropic",
+    provider: str | None = None,
+    include_pages: bool = False,
 ) -> None:
     from core.analyzer.endpoint_clusterer import EndpointClusterer
     from core.analyzer.event_classifier import EventClassifier
     from core.analyzer.tool_spec_builder import LLMProvider, ToolSpecBuilder
     from core.storage.db import get_db
 
+    provider = (provider or settings.llm_provider).lower()
+    if provider not in _PROVIDER_KEYS:
+        console.print(f"[red]Unknown provider:[/] {provider} (use anthropic, openai or gemini)")
+        raise typer.Exit(1)
+    key_field, key_env = _PROVIDER_KEYS[provider]
+    if not getattr(settings, key_field):
+        console.print(f"[red]Error:[/] {key_env} not set in environment or .env")
+        raise typer.Exit(1)
+
     threshold = min_confidence if min_confidence is not None else settings.min_confidence_threshold
 
     with console.status("[bold green]Loading captured requests...[/]"):
-        db = get_db()
-        async with db:
-            full_session_id = await db.resolve_session_id(session_id) or session_id
-            requests = await db.get_requests_for_session(full_session_id)
+        async with get_db() as db:
+            full_session_id = await db.resolve_session_id(session_id)
+            requests = await db.get_requests_for_session(full_session_id) if full_session_id else []
+            all_specs = await db.get_tool_specs()
 
+    if not full_session_id:
+        console.print(f"[red]Session not found:[/] {session_id}")
+        raise typer.Exit(1)
     session_id = full_session_id  # always use full UUID from here on
 
     if not requests:
-        console.print(f"[red]No requests found for session {session_id}[/]")
+        console.print(f"[red]No requests found for session {session_id[:8]}[/]")
         raise typer.Exit(1)
 
     console.print(f"Loaded [bold]{len(requests)}[/] requests")
 
-    # Classify
-    classifier = EventClassifier()
+    classifier = EventClassifier(include_pages=include_pages)
     filtered = classifier.classify(requests)
     rejected = len(requests) - len(filtered)
     console.print(
@@ -150,49 +186,58 @@ async def _analyze(
         console.print("[yellow]No useful requests remain after filtering.[/]")
         raise typer.Exit(1)
 
-    # Cluster
     with console.status("[bold green]Clustering endpoints...[/]"):
-        clusterer = EndpointClusterer()
-        clusters = clusterer.cluster(filtered)
+        clusters = EndpointClusterer().cluster(filtered)
 
     console.print(f"Found [bold]{len(clusters)}[/] unique endpoint clusters")
 
-    # Build specs with LLM
-    if not settings.anthropic_api_key:
-        console.print("[red]Error:[/] AUTOMCP_ANTHROPIC_API_KEY not set in environment or .env")
-        raise typer.Exit(1)
+    # Approved specs are kept; tool names must stay unique across all sessions
+    approved_here = [s for s in all_specs if s.session_id == session_id and s.approved]
+    approved_endpoints = {(s.method, s.url_template) for s in approved_here}
+    taken_names = {s.tool_name for s in all_specs if s.approved or s.session_id != session_id}
 
-    with console.status(f"[bold green]Analyzing with {settings.llm_model}...[/]"):
+    try:
         builder = ToolSpecBuilder(provider=LLMProvider(provider))
+    except ImportError as e:
+        console.print(f"[red]Error:[/] {e}")
+        raise typer.Exit(1)
+    with console.status(f"[bold green]Analyzing with {builder.model}...[/]"):
         requests_map = {r.id: r for r in filtered}
-        specs = await builder.build_specs(clusters, requests_map, session_id)
+        try:
+            specs = await builder.build_specs(clusters, requests_map, session_id, taken_names)
+        except Exception as e:
+            # Bad key, used-up quota, unknown model: show the provider's message, not a traceback
+            if not _is_provider_error(e):
+                raise
+            console.print(f"[red]{provider} API error:[/] {getattr(e, 'message', None) or e}")
+            raise typer.Exit(1)
 
-    # Filter by confidence
-    good_specs = [s for s in specs if s.confidence >= threshold]
+    good_specs = [
+        s for s in specs
+        if s.confidence >= threshold and (s.method, s.url_template) not in approved_endpoints
+    ]
     console.print(
         f"Generated [bold]{len(good_specs)}[/] specs above confidence threshold {threshold:.2f}"
     )
 
     if not good_specs:
-        console.print("[yellow]No specs met the confidence threshold.[/]")
+        console.print("[yellow]No new specs met the confidence threshold.[/]")
         raise typer.Exit(0)
 
-    # Save to DB
-    db = get_db()
-    async with db:
+    async with get_db() as db:
+        replaced = await db.delete_unapproved_specs(session_id)
         for spec in good_specs:
             await db.save_tool_spec(spec)
+    if replaced:
+        console.print(f"[dim]Replaced {replaced} unreviewed specs from a previous analysis[/]")
 
-    # Write to JSON file
-    out_path = output or (settings.generated_specs_dir / f"{session_id}_specs.json")
-    out_path = Path(out_path)
+    out_path = Path(output or (settings.generated_specs_dir / f"{session_id}_specs.json"))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
         json.dumps([s.model_dump(mode="json") for s in good_specs], indent=2),
         encoding="utf-8",
     )
 
-    # Display summary table
     table = Table(title="Generated Tool Specs")
     table.add_column("Tool Name", style="cyan")
     table.add_column("Method")
@@ -214,7 +259,7 @@ async def _analyze(
     console.print(table)
     console.print(f"\nSpecs saved to [cyan]{out_path}[/]")
     console.print(
-        f"Run [bold]automcp review {session_id}[/] to approve specs before generating"
+        f"Run [bold]automcp review {session_id[:8]}[/] to approve specs before generating"
     )
 
 
@@ -235,15 +280,16 @@ def generate(
 
 
 async def _generate(session_id: str, output_dir: Path | None) -> None:
-    from core.codegen.python_mcp_generator import PythonMcpGenerator
+    from core.codegen.python_mcp_generator import GenerationError, PythonMcpGenerator
     from core.codegen.validator import CodeValidator
     from core.storage.db import get_db
+    from core.storage.models import GeneratedTool
 
     out_dir = Path(output_dir or settings.generated_tools_dir)
 
-    db = get_db()
-    async with db:
+    async with get_db() as db:
         specs = await db.get_tool_specs(session_id=session_id)
+        all_tools = await db.get_generated_tools()
 
     if not specs:
         console.print(f"[red]No tool specs found for session {session_id}[/]")
@@ -256,6 +302,13 @@ async def _generate(session_id: str, output_dir: Path | None) -> None:
         console.print(f"Run [bold]automcp review {session_id}[/] to approve specs first")
         raise typer.Exit(0)
 
+    # Tool files are named after the tool, so names must be unique across sessions
+    spec_ids = {s.spec_id for s in specs}
+    names_elsewhere = {
+        t.tool_name for t in all_tools
+        if t.spec_id not in spec_ids and t.validation_status == "valid"
+    }
+
     generator = PythonMcpGenerator(output_dir=out_dir)
     validator = CodeValidator()
 
@@ -265,32 +318,39 @@ async def _generate(session_id: str, output_dir: Path | None) -> None:
     table.add_column("Valid", justify="center")
     table.add_column("Notes")
 
+    valid_count = 0
     for spec in specs:
-        try:
-            path = generator.generate(spec, output_dir=out_dir)
-            result = validator.validate_file(path, spec)
+        record = GeneratedTool(spec_id=spec.spec_id, tool_name=spec.tool_name, file_path="")
+        if spec.tool_name in names_elsewhere:
+            record.validation_status = "invalid"
+            record.validation_errors = [
+                f"Name '{spec.tool_name}' is already used by a tool from another session; "
+                "rename it with automcp review"
+            ]
+        else:
+            try:
+                path = generator.generate(spec, output_dir=out_dir)
+                record.file_path = str(path.resolve())
+                result = validator.validate_file(path, spec)
+                record.validation_status = "valid" if result.is_valid else "invalid"
+                record.validation_errors = result.errors
+            except GenerationError as e:
+                record.validation_status = "invalid"
+                record.validation_errors = [str(e)]
 
-            # Update validation status in DB
-            db2 = get_db()
-            async with db2:
-                tools = await db2.get_generated_tools(session_id=session_id)
-                for tool in tools:
-                    if tool.tool_name == spec.tool_name:
-                        await db2.update_generated_tool_validation(
-                            tool.id,
-                            "valid" if result.is_valid else "invalid",
-                            result.errors,
-                        )
+        async with get_db() as db:
+            await db.save_generated_tool(record)
 
-            status = "[green]✓[/]" if result.is_valid else "[red]✗[/]"
-            notes = ", ".join(result.errors[:2]) if result.errors else "OK"
-            table.add_row(spec.tool_name, path.name, status, notes)
-        except Exception as e:
-            table.add_row(spec.tool_name, "—", "[red]✗[/]", str(e)[:60])
+        ok = record.validation_status == "valid"
+        valid_count += ok
+        notes = ", ".join(record.validation_errors[:2]) if record.validation_errors else "OK"
+        file_name = Path(record.file_path).name if record.file_path else "—"
+        table.add_row(spec.tool_name, file_name, "[green]✓[/]" if ok else "[red]✗[/]", notes[:80])
 
     console.print(table)
-    console.print(f"\nTools written to [cyan]{out_dir}[/]")
-    console.print("Run [bold]automcp serve[/] to start the MCP server")
+    console.print(f"\n{valid_count}/{len(specs)} tools written to [cyan]{out_dir}[/]")
+    if valid_count:
+        console.print("Run [bold]automcp serve[/] to start the MCP server")
 
 
 # ---------------------------------------------------------------------------
@@ -300,13 +360,48 @@ async def _generate(session_id: str, output_dir: Path | None) -> None:
 
 @app.command()
 def serve(
-    host: str = typer.Option(None, "--host", help="Server host"),
-    port: int = typer.Option(None, "--port", "-p", help="Server port"),
+    host: str = typer.Option(None, "--host", help="Server host (http/sse only)"),
+    port: int = typer.Option(None, "--port", "-p", help="Server port (http/sse only)"),
+    transport: str = typer.Option(
+        "http", "--transport", "-t",
+        help="stdio (Claude Desktop / Claude Code), http (Streamable HTTP at /mcp), or sse (legacy)",
+    ),
 ) -> None:
     """Start the AutoMCP MCP server."""
     from core.runtime.server import run_server
 
-    run_server(host=host, port=port)
+    if transport not in ("stdio", "http", "sse"):
+        console.print(f"[red]Unknown transport:[/] {transport} (use stdio, http or sse)")
+        raise typer.Exit(1)
+    run_server(host=host, port=port, transport=transport)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# mcp-config
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def mcp_config() -> None:
+    """Print the config to connect Claude Desktop or Claude Code to AutoMCP."""
+    import shutil
+    import sys
+
+    from core.config import HOME
+
+    exe = shutil.which("automcp") or str(Path(sys.executable).with_name("automcp"))
+    entry = {
+        "command": exe,
+        "args": ["serve", "--transport", "stdio"],
+        "env": {"AUTOMCP_HOME": str(HOME)},
+    }
+    console.print("[bold]Claude Desktop[/] — add to claude_desktop_config.json:")
+    # Plain output: Rich would wrap long paths and break the JSON when copied
+    typer.echo(json.dumps({"mcpServers": {"automcp": entry}}, indent=2))
+    console.print("\n[bold]Claude Code[/] — run:")
+    typer.echo(
+        f"claude mcp add automcp --env AUTOMCP_HOME={HOME} -- {exe} serve --transport stdio"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -490,35 +585,40 @@ def auth_check(
 
 
 async def _auth_check(session_id: str, probe_url: str | None) -> None:
+    from core.auth.replay import build_request_headers
     from core.auth.session_health import SessionHealthChecker
     from core.storage.db import get_db
-    import json
 
-    db = get_db()
-    async with db:
+    async with get_db() as db:
         full_id = await db.resolve_session_id(session_id) or session_id
         session = await db.get_session(full_id)
+        specs = await db.get_tool_specs(session_id=full_id)
 
     if session is None:
         console.print(f"[red]Session not found:[/] {session_id}")
         raise typer.Exit(1)
 
-    cookies = session.browser_context_state.get("cookies", {})
-    if not cookies:
-        console.print("[yellow]No cookies found in session state.[/]")
-        console.print("The session may not have captured auth cookies.")
+    state = session.browser_context_state
+    if not state.get("cookies") and not state.get("cookie_jar") and not state.get("host_headers"):
+        console.print("[yellow]No cookies or auth headers found in session state.[/]")
+        console.print("The session may not have captured a login.")
         return
 
-    url = probe_url or session.url
-    console.print(f"Probing [cyan]{url}[/] with {len(cookies)} cookies...")
+    # A recorded API call is a better probe than the homepage, which often
+    # returns 200 even when logged out
+    sample = next(
+        (s.sample_url for s in specs if s.approved and s.method == "GET" and s.sample_url), None
+    )
+    url = probe_url or sample or session.url
+    headers = build_request_headers(state, url)
+    console.print(f"Probing [cyan]{url}[/]...")
 
     checker = SessionHealthChecker()
-    health = await checker.check(url, cookies)
+    health = await checker.check(url, headers=headers)
     health.session_id = full_id
 
-    age = checker.get_cookies_age_hours(session.browser_context_state)
+    age = checker.get_cookies_age_hours(state)
 
-    from rich.table import Table
     table = Table(show_header=False, box=None)
     table.add_column("Field", style="dim")
     table.add_column("Value")
@@ -536,7 +636,7 @@ async def _auth_check(session_id: str, probe_url: str | None) -> None:
     if not health.is_valid:
         console.print(
             f"\n[yellow]Credentials appear expired.[/] "
-            f"Re-record with: [bold]automcp record {session.url}[/]"
+            f"Refresh with: [bold]automcp auth-refresh {full_id[:8]}[/]"
         )
 
 
@@ -550,15 +650,17 @@ def auth_refresh(
     session_id: str = typer.Argument(..., help="Session ID to refresh auth for"),
 ):
     """Re-open the browser to refresh expired auth credentials."""
-    asyncio.run(_auth_refresh(session_id))
+    try:
+        asyncio.run(_auth_refresh(session_id))
+    except KeyboardInterrupt:
+        pass
 
 
 async def _auth_refresh(session_id: str) -> None:
-    from core.storage.db import get_db
     from core.recorder.browser_session import BrowserSession
+    from core.storage.db import get_db
 
-    db = get_db()
-    async with db:
+    async with get_db() as db:
         full_id = await db.resolve_session_id(session_id) or session_id
         session = await db.get_session(full_id)
 
@@ -570,18 +672,16 @@ async def _auth_refresh(session_id: str) -> None:
         f"[bold]Refreshing auth for session[/] [cyan]{full_id[:8]}[/]\n"
         f"URL: [cyan]{session.url}[/]\n\n"
         "Log in again in the browser window, then close it.",
-        title="AutoMCP 2.0 — Auth Refresh",
+        title="AutoMCP — Auth Refresh",
     ))
 
     try:
-        async with BrowserSession(url=session.url, headless=False, project_id=session.project_id) as new_session:
-            while True:
-                await asyncio.sleep(1)
-    except (KeyboardInterrupt, Exception):
-        pass
+        async with BrowserSession(url=session.url, refresh_session_id=full_id) as browser:
+            await browser.wait_until_closed()
+    except asyncio.CancelledError:
+        pass  # Ctrl+C: the fresh auth state has still been saved
 
-    console.print(f"\n[green]Auth refreshed.[/] New session saved.")
-    console.print("Your existing tools will use the new credentials on next `automcp serve`.")
+    console.print("Generated tools use the new login automatically (within 30 seconds).")
 
 
 # ---------------------------------------------------------------------------
@@ -619,7 +719,7 @@ async def _drift_check(session_id: str) -> None:
         console.print("Run [bold]automcp analyze[/] again to capture response schemas.")
         return
 
-    cookies = session.browser_context_state.get("cookies", {})
+    auth_state = session.browser_context_state
     detector = DriftDetector()
 
     table = Table(title="API Drift Report")
@@ -630,7 +730,7 @@ async def _drift_check(session_id: str) -> None:
 
     with console.status(f"[bold green]Checking {len(get_specs)} endpoints...[/]"):
         for spec in get_specs:
-            report = await detector.check(spec, cookies)
+            report = await detector.check(spec, auth_state)
             if report.error:
                 status = f"[yellow]? {report.error[:30]}[/]"
             elif report.has_drift:

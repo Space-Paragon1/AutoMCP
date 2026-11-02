@@ -5,6 +5,9 @@ from pathlib import Path
 
 from core.storage.models import ToolSpec, ValidationResult
 
+# Everything a generated tool file is allowed to import
+ALLOWED_IMPORTS = {"__future__", "typing", "pydantic", "core.runtime.executor"}
+
 
 class CodeValidator:
     """Validates generated tool files using AST analysis (never exec/eval)."""
@@ -31,6 +34,16 @@ class CodeValidator:
             tree = ast.parse(source)
         except SyntaxError as e:
             return ValidationResult(is_valid=False, errors=[f"Syntax error: {e}"])
+
+        # --- Import whitelist: generated tools only need these modules ---
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name not in ALLOWED_IMPORTS:
+                        errors.append(f"Unexpected import: {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module not in ALLOWED_IMPORTS:
+                    errors.append(f"Unexpected import: from {node.module}")
 
         # --- Dangerous pattern check ---
         for node in ast.walk(tree):

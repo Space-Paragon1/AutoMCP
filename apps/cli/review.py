@@ -1,13 +1,12 @@
 """Interactive spec review command."""
 from __future__ import annotations
 
-import asyncio
 from rich.console import Console
 from rich.table import Table
-from rich.prompt import Confirm, Prompt
+from rich.prompt import Prompt
 from rich.panel import Panel
-from rich import print as rprint
 
+from core.codegen.naming import to_snake_case
 from core.storage.db import get_db
 from core.storage.models import ToolSpec
 
@@ -15,8 +14,7 @@ console = Console()
 
 
 async def run_review(session_id: str) -> None:
-    db = get_db()
-    async with db:
+    async with get_db() as db:
         specs = await db.get_tool_specs(session_id=session_id)
 
     if not specs:
@@ -28,7 +26,7 @@ async def run_review(session_id: str) -> None:
         f"[bold]Reviewing {len(specs)} tool specs[/]\n"
         "For each spec: approve it, rename it, or skip it.\n"
         "Only approved specs will be generated into MCP tools.",
-        title="AutoMCP 2.0 — Review",
+        title="AutoMCP — Review",
     ))
 
     approved_count = 0
@@ -55,7 +53,9 @@ async def run_review(session_id: str) -> None:
         updates: dict = {}
 
         if action == "rename":
-            new_name = Prompt.ask("New tool name", default=spec.tool_name)
+            new_name = to_snake_case(Prompt.ask("New tool name", default=spec.tool_name))
+            if new_name != spec.tool_name:
+                console.print(f"[dim]Tool name: {new_name}[/]")
             new_purpose = Prompt.ask("New purpose", default=spec.purpose)
             updates["tool_name"] = new_name
             updates["purpose"] = new_purpose
@@ -72,8 +72,7 @@ async def run_review(session_id: str) -> None:
             approved_count += 1
 
         if updates:
-            db = get_db()
-            async with db:
+            async with get_db() as db:
                 await db.update_tool_spec(spec.spec_id, **updates)
 
     console.print(f"\n[green]Review complete:[/] {approved_count} approved, {skipped_count} skipped")

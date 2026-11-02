@@ -4,7 +4,6 @@ import json
 
 from playwright.async_api import BrowserContext
 
-from core.storage.models import CapturedRequest
 
 
 class CookieStrategy:
