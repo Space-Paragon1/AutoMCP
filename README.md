@@ -164,12 +164,14 @@ automcp ui --port 7860
 
 Starts a dark-theme dashboard on your computer. The browser doesn't open by itself: once the terminal shows `AutoMCP Dashboard → http://127.0.0.1:7860`, open that address in your web browser. Keep the terminal open while you use it, and press **Ctrl+C** there to stop it. If the port is taken, run `automcp ui --port 7861` and open that port instead.
 
-The dashboard shows:
-- Sessions browser
-- Specs table with inline approve/read-only toggles
-- Tools viewer with syntax-highlighted source code
-- Execution log with success rate and duration stats
-- Projects overview
+What you can do there:
+- **Sessions:** click one to see only its specs
+- **Specs:** approve specs or mark them read-only, then press **Generate tools** to write the tool files (the same as `automcp generate`)
+- **Tools:** click a tool to fill in its inputs and **Run** it with your recorded login, and to read its source code. Tools that change data (POST, PUT, DELETE) ask before sending.
+- **Executions:** every tool run, with success rate and duration
+- **Projects:** sessions grouped by project
+
+The dashboard only answers requests addressed to this computer, and only accepts changes from its own page, so other websites you visit can't use it to run your tools.
 
 ---
 

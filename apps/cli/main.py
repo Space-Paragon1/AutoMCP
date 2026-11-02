@@ -306,16 +306,13 @@ def generate(
 
 
 async def _generate(session_id: str, output_dir: Path | None) -> None:
-    from core.codegen.python_mcp_generator import GenerationError, PythonMcpGenerator
-    from core.codegen.validator import CodeValidator
+    from core.codegen.pipeline import generate_tools
     from core.storage.db import get_db
-    from core.storage.models import GeneratedTool
 
     out_dir = Path(output_dir or settings.generated_tools_dir)
 
     async with get_db() as db:
         specs = await db.get_tool_specs(session_id=session_id)
-        all_tools = await db.get_generated_tools()
 
     if not specs:
         console.print(f"[red]No tool specs found for session {session_id}[/]")
@@ -328,53 +325,22 @@ async def _generate(session_id: str, output_dir: Path | None) -> None:
         console.print(f"Run [bold]automcp review {session_id}[/] to approve specs first")
         raise typer.Exit(0)
 
-    # Tool files are named after the tool, so names must be unique across sessions
-    spec_ids = {s.spec_id for s in specs}
-    names_elsewhere = {
-        t.tool_name for t in all_tools
-        if t.spec_id not in spec_ids and t.validation_status == "valid"
-    }
-
-    generator = PythonMcpGenerator(output_dir=out_dir)
-    validator = CodeValidator()
+    records = await generate_tools(specs, out_dir)
 
     table = Table(title="Generated Tools")
     table.add_column("Tool Name", style="cyan")
     table.add_column("File")
     table.add_column("Valid", justify="center")
     table.add_column("Notes")
-
-    valid_count = 0
-    for spec in specs:
-        record = GeneratedTool(spec_id=spec.spec_id, tool_name=spec.tool_name, file_path="")
-        if spec.tool_name in names_elsewhere:
-            record.validation_status = "invalid"
-            record.validation_errors = [
-                f"Name '{spec.tool_name}' is already used by a tool from another session; "
-                "rename it with automcp review"
-            ]
-        else:
-            try:
-                path = generator.generate(spec, output_dir=out_dir)
-                record.file_path = str(path.resolve())
-                result = validator.validate_file(path, spec)
-                record.validation_status = "valid" if result.is_valid else "invalid"
-                record.validation_errors = result.errors
-            except GenerationError as e:
-                record.validation_status = "invalid"
-                record.validation_errors = [str(e)]
-
-        async with get_db() as db:
-            await db.save_generated_tool(record)
-
+    for record in records:
         ok = record.validation_status == "valid"
-        valid_count += ok
         notes = ", ".join(record.validation_errors[:2]) if record.validation_errors else "OK"
         file_name = Path(record.file_path).name if record.file_path else "—"
-        table.add_row(spec.tool_name, file_name, "[green]✓[/]" if ok else "[red]✗[/]", notes[:80])
+        table.add_row(record.tool_name, file_name, "[green]✓[/]" if ok else "[red]✗[/]", notes[:80])
 
+    valid_count = sum(r.validation_status == "valid" for r in records)
     console.print(table)
-    console.print(f"\n{valid_count}/{len(specs)} tools written to [cyan]{out_dir}[/]")
+    console.print(f"\n{valid_count}/{len(records)} tools written to [cyan]{out_dir}[/]")
     if valid_count:
         console.print("Run [bold]automcp serve[/] to start the MCP server")
 
