@@ -1,13 +1,13 @@
 """Detect when a live API response diverges from the recorded schema."""
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from core.analyzer.schema_inferrer import infer_schema
+from core.auth.replay import build_request_headers
 from core.storage.models import ToolSpec
 
 
@@ -38,52 +38,35 @@ class DriftDetector:
     async def check(
         self,
         spec: ToolSpec,
-        cookies: dict[str, str],
-        sample_inputs: dict[str, Any] | None = None,
+        auth_state: dict[str, Any],
     ) -> DriftReport:
-        """Make a live request and compare response schema to recorded schema."""
-        if not spec.response_schema:
+        """Replay the recorded sample request and compare its response schema to the recording."""
+        def _report(error: str, status: int | None = None) -> DriftReport:
             return DriftReport(
-                tool_name=spec.tool_name,
-                has_drift=False,
-                added_fields=[],
-                removed_fields=[],
-                error="No recorded schema to compare against",
+                tool_name=spec.tool_name, has_drift=False,
+                added_fields=[], removed_fields=[], status_code=status, error=error,
             )
 
-        headers: dict[str, str] = {"Accept": "application/json"}
-        if cookies:
-            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
+        if not spec.response_schema:
+            return _report("No recorded schema to compare against")
+
+        url = spec.sample_url
+        if not url:
+            if "{" in spec.url_template:
+                return _report("No sample URL recorded (re-run analyze)")
+            url = spec.url_template
+
+        headers = build_request_headers(auth_state, url)
+        headers.setdefault("accept", "application/json")
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(
-                    spec.url_template,
-                    params=sample_inputs or {},
-                    headers=headers,
-                    follow_redirects=True,
-                )
-                if resp.status_code >= 400:
-                    return DriftReport(
-                        tool_name=spec.tool_name,
-                        has_drift=False,
-                        added_fields=[],
-                        removed_fields=[],
-                        status_code=resp.status_code,
-                        error=f"HTTP {resp.status_code}",
-                    )
-
-                live_data = resp.json()
-                live_schema = infer_schema(live_data)
-
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.get(url, headers=headers)
+            if resp.status_code >= 400:
+                return _report(f"HTTP {resp.status_code}", resp.status_code)
+            live_schema = infer_schema(resp.json())
         except Exception as e:
-            return DriftReport(
-                tool_name=spec.tool_name,
-                has_drift=False,
-                added_fields=[],
-                removed_fields=[],
-                error=str(e),
-            )
+            return _report(str(e))
 
         recorded_keys = _get_keys(spec.response_schema)
         live_keys = _get_keys(live_schema)

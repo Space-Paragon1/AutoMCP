@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import re
-from datetime import datetime
+import json
+import pprint
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader
 
+from core.codegen.naming import check_spec_safe
 from core.config import settings
-from core.storage.db import get_db
-from core.storage.models import GeneratedTool, ToolSpec
+from core.storage.models import ToolSpec
 
 # Path to the templates directory (relative to this file)
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -24,30 +24,50 @@ _TYPE_MAP: dict[str, str] = {
 }
 
 
+class GenerationError(Exception):
+    """A spec can't be rendered into a safe, valid tool file."""
+
+
 def _filter_python_type(type_str: str) -> str:
     """Jinja2 filter: convert JSON schema type name to Python type annotation."""
     return _TYPE_MAP.get(type_str.lower(), "Any")
 
 
-def _filter_to_title_case(snake_str: str) -> str:
-    """Jinja2 filter: convert snake_case to TitleCase (PascalCase)."""
-    return re.sub(r'(?:^|_)([a-z])', lambda m: m.group(1).upper(), snake_str)
+def _filter_pyliteral(value: object) -> str:
+    """Jinja2 filter: render JSON-like data as a readable Python literal."""
+    return pprint.pformat(value, width=100, sort_dicts=False)
 
 
 def _build_jinja_env() -> Environment:
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
-        autoescape=select_autoescape([]),  # No HTML escaping for Python source
+        autoescape=False,  # Python source, not HTML; values are escaped with pyrepr instead
         trim_blocks=True,
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
     env.filters["python_type"] = _filter_python_type
-    env.filters["to_title_case"] = _filter_to_title_case
-    # Also add a simple 'upper' filter for method comparisons in templates
-    env.filters["upper"] = str.upper
-    env.filters["lower"] = str.lower
+    env.filters["pyrepr"] = repr
+    env.filters["pyliteral"] = _filter_pyliteral
     return env
+
+
+def _spec_data(spec: ToolSpec) -> dict:
+    """The runtime data a generated tool passes to the executor."""
+    data = {
+        "tool_name": spec.tool_name,
+        "method": spec.method.upper(),
+        "url_template": spec.url_template,
+        "session_id": spec.session_id,
+        "request_mapping": spec.request_mapping,
+        "response_type": spec.response_type,
+        "body_encoding": spec.body_encoding,
+    }
+    try:
+        # Round-trip through strict JSON so only plain literals reach the template
+        return json.loads(json.dumps(data, allow_nan=False))
+    except (TypeError, ValueError) as e:
+        raise GenerationError(f"Spec contains values that can't be rendered: {e}") from e
 
 
 class PythonMcpGenerator:
@@ -57,49 +77,36 @@ class PythonMcpGenerator:
         self._env = _build_jinja_env()
         self._default_output_dir = output_dir or settings.generated_tools_dir
 
-    def generate(self, spec: ToolSpec, output_dir: Path | None = None) -> Path:
-        """
-        Render the tool template for *spec* and write it to *output_dir*.
+    def render(self, spec: ToolSpec) -> str:
+        """Render the tool source for *spec*. Raises GenerationError for unsafe specs."""
+        errors = check_spec_safe(spec)
+        if errors:
+            raise GenerationError("; ".join(errors))
 
-        Returns the path of the written file.
-        Also persists a GeneratedTool record to the database (fire-and-forget
-        via a sync helper to avoid requiring an event loop here).
-        """
-        out_dir = output_dir or self._default_output_dir
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
+        # Python needs required parameters before optional ones
+        inputs = sorted(spec.inputs, key=lambda i: not i.required)
+        module_doc = (
+            f"AutoMCP generated tool: {spec.tool_name}\n\n{spec.purpose}\n\n"
+            f"{spec.method.upper()} {spec.url_template}"
+        )
+        docstring = f"{spec.purpose}\n\nHTTP: {spec.method.upper()} {spec.url_template}"
+        if spec.is_readonly:
+            docstring += "\nRead-only: this tool does not change data."
 
         template = self._env.get_template("tool.py.jinja2")
-        rendered = template.render(spec=spec)
-
-        file_path = out_dir / f"{spec.tool_name}.py"
-        file_path.write_text(rendered, encoding="utf-8")
-
-        # Persist GeneratedTool record asynchronously
-        import asyncio
-
-        tool_record = GeneratedTool(
-            spec_id=spec.spec_id,
-            tool_name=spec.tool_name,
-            file_path=str(file_path.resolve()),
-            generated_at=datetime.utcnow(),
-            validation_status="pending",
+        return template.render(
+            spec=spec,
+            inputs=inputs,
+            spec_data=_spec_data(spec),
+            module_doc=module_doc,
+            docstring=docstring,
         )
 
-        # Run DB save in a new event loop if there isn't one running,
-        # otherwise schedule it as a coroutine.
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._save_tool_record(tool_record))
-        except RuntimeError:
-            # No running loop — use asyncio.run
-            asyncio.run(self._save_tool_record(tool_record))
-
+    def generate(self, spec: ToolSpec, output_dir: Path | None = None) -> Path:
+        """Render the tool for *spec* and write it to *output_dir*. Returns the file path."""
+        source = self.render(spec)
+        out_dir = Path(output_dir or self._default_output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        file_path = out_dir / f"{spec.tool_name}.py"
+        file_path.write_text(source, encoding="utf-8")
         return file_path
-
-    @staticmethod
-    async def _save_tool_record(tool_record: GeneratedTool) -> None:
-        from core.storage.db import AsyncDatabase
-        db = AsyncDatabase()
-        async with db:
-            await db.save_generated_tool(tool_record)

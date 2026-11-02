@@ -6,7 +6,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Callable
 
-from core.storage.models import GeneratedTool
 
 
 class ToolLoader:

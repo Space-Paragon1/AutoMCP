@@ -3,13 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import uuid
-from datetime import datetime
 from typing import Any
 
-from playwright.async_api import BrowserContext, Request, Response, Route
+from playwright.async_api import BrowserContext, Request, Response
 
 from core.config import settings
-from core.storage.models import CapturedRequest
+from core.storage.models import CapturedRequest, utcnow
 
 # MIME types whose bodies we want to capture
 ALLOWED_RESPONSE_MIME_PREFIXES = (
@@ -61,6 +60,8 @@ class NetworkCapture:
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_requests)
         self._context: BrowserContext | None = None
         self._pending_action_label: str | None = None
+        # Response handlers still running (reading bodies); stop() waits for them
+        self._tasks: set[asyncio.Task] = set()
 
     async def start(self, context: BrowserContext) -> None:
         """Attach event handlers to the browser context."""
@@ -80,13 +81,12 @@ class NetworkCapture:
                 pass
             self._context = None
 
-        # Wait briefly for any in-flight responses to arrive
-        for _ in range(10):
-            if not self._in_flight:
-                break
-            await asyncio.sleep(0.2)
+        # Wait briefly for responses that are still being read
+        if self._tasks:
+            await asyncio.wait(list(self._tasks), timeout=5.0)
+        self._in_flight.clear()
 
-        return list(self._captured)
+        return sorted(self._captured, key=lambda r: r.timestamp)
 
     def set_action_label(self, label: str) -> None:
         """Set a label that will be attached to the next captured request."""
@@ -101,7 +101,7 @@ class NetworkCapture:
         request_id = id(request)
         self._in_flight[str(request_id)] = {
             "request": request,
-            "started_at": datetime.utcnow(),
+            "started_at": utcnow(),
             "action_label": self._consume_action_label(),
         }
 
@@ -109,7 +109,9 @@ class NetworkCapture:
         self._in_flight.pop(str(id(request)), None)
 
     def _on_response(self, response: Response) -> None:
-        asyncio.ensure_future(self._process_response(response))
+        task = asyncio.ensure_future(self._process_response(response))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _process_response(self, response: Response) -> None:
         async with self._semaphore:
@@ -160,15 +162,21 @@ class NetworkCapture:
                 except Exception:
                     resp_body = None
 
-            # Sanitise headers — remove values that are too long (cookies can be huge)
+            # request.headers leaves out cookies and other security headers;
+            # all_headers() has the full set the browser sent.
+            try:
+                raw_headers = await request.all_headers()
+            except Exception:
+                raw_headers = request.headers
+            # Truncate very long values (except cookies, which must stay intact to replay)
             req_headers: dict[str, str] = {}
-            for k, v in request.headers.items():
-                req_headers[k] = v[:4096] if len(v) > 4096 else v
+            for k, v in raw_headers.items():
+                req_headers[k] = v if k.lower() == "cookie" or len(v) <= 4096 else v[:4096]
 
             captured = CapturedRequest(
                 id=str(uuid.uuid4()),
                 session_id=self._session_id,
-                timestamp=meta.get("started_at", datetime.utcnow()),
+                timestamp=meta.get("started_at", utcnow()),
                 method=method,
                 url=url,
                 request_headers=req_headers,
@@ -177,5 +185,6 @@ class NetworkCapture:
                 response_headers=dict(resp_headers),
                 response_body=resp_body,
                 action_label=meta.get("action_label"),
+                resource_type=request.resource_type,
             )
             self._captured.append(captured)

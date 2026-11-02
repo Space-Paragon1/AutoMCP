@@ -1,7 +1,6 @@
 """List and inspect recording sessions."""
 from __future__ import annotations
 
-import asyncio
 from rich.console import Console
 from rich.table import Table
 

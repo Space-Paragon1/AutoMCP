@@ -1,15 +1,12 @@
 """Track auth session health and detect expired credentials."""
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any
+from datetime import datetime
 
 import httpx
 
-from core.config import settings
+from core.storage.models import utcnow
 
 
 @dataclass
@@ -36,27 +33,34 @@ class RefreshStrategy:
 class SessionHealthChecker:
     """Check if recorded auth credentials are still valid."""
 
-    async def check(self, probe_url: str, cookies: dict[str, str]) -> AuthHealth:
-        """Hit a probe URL with stored cookies and check if still authenticated."""
-        from core.storage.db import AsyncDatabase
+    async def check(
+        self,
+        probe_url: str,
+        cookies: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> AuthHealth:
+        """Hit a probe URL with stored credentials and check if still authenticated."""
+        request_headers = dict(headers or {})
+        if cookies:
+            request_headers["cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     probe_url,
-                    headers={"Cookie": "; ".join(f"{k}={v}" for k, v in cookies.items())},
+                    headers=request_headers,
                     follow_redirects=False,
                 )
                 is_valid = resp.status_code < 400 and resp.status_code not in (301, 302)
                 return AuthHealth(
                     session_id="",
-                    last_checked=datetime.utcnow(),
+                    last_checked=utcnow(),
                     is_valid=is_valid,
                     status_code=resp.status_code,
                 )
         except Exception as e:
             return AuthHealth(
                 session_id="",
-                last_checked=datetime.utcnow(),
+                last_checked=utcnow(),
                 is_valid=False,
                 error=str(e),
             )
@@ -68,6 +72,6 @@ class SessionHealthChecker:
             return 999.0
         try:
             dt = datetime.fromisoformat(recorded_at)
-            return (datetime.utcnow() - dt).total_seconds() / 3600
+            return (utcnow() - dt).total_seconds() / 3600
         except Exception:
             return 999.0
