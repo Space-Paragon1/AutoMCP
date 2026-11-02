@@ -49,6 +49,7 @@ This walkthrough uses [pokeapi.co](https://pokeapi.co), a public site with no lo
 4. **Generate.** Run `automcp generate <session_id>`. This writes the tool files to `generated/tools/`.
 5. **Try a tool.** Run `automcp test <tool_name>` with a name from step 4. It asks for inputs and shows the site's response.
 6. **Use it from Claude.** Run `automcp mcp-config` and follow the printed instructions.
+7. **See it all in the dashboard.** Run `automcp ui`, then open http://127.0.0.1:7860 in your web browser to see your sessions, specs, tools and test runs. Press **Ctrl+C** in the terminal to stop it.
 
 If `analyze` reports "No useful requests remain after filtering", the site didn't make any API calls while you recorded. Record again and use the site more, or add `--include-pages` for sites that load whole pages instead of calling an API.
 
@@ -158,7 +159,9 @@ automcp ui
 automcp ui --port 7860
 ```
 
-Opens a dark-theme dashboard at `http://127.0.0.1:7860` with:
+Starts a dark-theme dashboard on your computer. The browser doesn't open by itself: once the terminal shows `AutoMCP Dashboard → http://127.0.0.1:7860`, open that address in your web browser. Keep the terminal open while you use it, and press **Ctrl+C** there to stop it. If the port is taken, run `automcp ui --port 7861` and open that port instead.
+
+The dashboard shows:
 - Sessions browser
 - Specs table with inline approve/read-only toggles
 - Tools viewer with syntax-highlighted source code

@@ -22,6 +22,17 @@ async def test_dashboard_handles_parallel_requests():
             assert [r.status_code for r in responses] == [200] * len(paths)
 
 
+async def test_dashboard_page_renders():
+    async with get_db() as db:
+        await db.save_session(RecordingSession(url="https://x.com"))
+
+    transport = httpx.ASGITransport(app=app_web)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/")
+    assert response.status_code == 200
+    assert '<div class="stat-value" id="stat-sessions">1</div>' in response.text
+
+
 async def test_tool_source_rejects_bad_names():
     transport = httpx.ASGITransport(app=app_web)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
