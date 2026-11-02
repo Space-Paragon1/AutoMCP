@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, computed_field
@@ -43,7 +43,8 @@ class ToolSpec(BaseModel):
     auth_strategy: Literal["cookies", "bearer", "api_key", "none"]
     csrf_strategy: str | None = None
     inputs: list[ToolInput] = Field(default_factory=list)
-    request_mapping: dict[str, str] = Field(default_factory=dict)
+    # Request field -> "$input.<name>" or a fixed value the browser always sent
+    request_mapping: dict[str, Any] = Field(default_factory=dict)
     response_type: Literal["json", "text", "binary"] = "json"
     confidence: float = 0.0
     quality_score: QualityScore | None = None

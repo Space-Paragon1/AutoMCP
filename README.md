@@ -86,9 +86,12 @@ automcp analyze <session_id>
 automcp analyze <session_id> --min-confidence 0.7
 automcp analyze <session_id> --output my_specs.json
 automcp analyze <session_id> --include-pages   # also use HTML page loads
+automcp analyze <session_id> --allow-host api.partner.com   # keep calls to another site
 ```
 
-Filters out noise (analytics, trackers, static assets, page loads, redirects, errors), clusters endpoints by URL pattern, then calls the LLM (Claude, Gemini or OpenAI; see [Multi-model support](#multi-model-support)) to produce structured `ToolSpec` JSON for each endpoint — not raw code. Endpoints are sent in batches, so large sessions work. Specs are saved to `generated/specs/` and the database.
+Filters out noise (analytics, trackers, static assets, page loads, redirects, errors), clusters endpoints by URL pattern, then calls the LLM (Claude, Gemini or OpenAI; see [Multi-model support](#multi-model-support)) to produce structured `ToolSpec` JSON for each endpoint — not raw code. Every provider is held to a fixed JSON schema (structured outputs), so answers can't come back malformed. Endpoints are sent in batches, so large sessions work. Specs are saved to `generated/specs/` and the database.
+
+Only the recorded site's own calls are analyzed (its subdomains count, so `app.example.com` keeps `api.example.com`). Calls to other sites — fonts, chat widgets, payment forms, ads — are skipped, and `analyze` lists the ones it skipped. A call to another site that carries an auth header (a hosted backend like Supabase or Firebase) is kept. If the app's real API lives on another domain, keep it with `--allow-host`.
 
 `--include-pages` keeps full HTML page loads, for server-rendered sites that don't have a JSON API. Re-running `analyze` replaces specs you haven't reviewed yet and keeps the ones you approved.
 

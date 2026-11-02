@@ -101,9 +101,14 @@ def analyze(
         False, "--include-pages",
         help="Also analyze full HTML page loads (for server-rendered sites without a JSON API)",
     ),
+    allow_host: list[str] = typer.Option(
+        None, "--allow-host",
+        help="Keep calls to this other site (repeatable). By default only the recorded "
+             "site's own calls are analyzed.",
+    ),
 ) -> None:
     """Analyze captured requests and generate tool specs."""
-    asyncio.run(_analyze(session_id, output, min_confidence, provider, include_pages))
+    asyncio.run(_analyze(session_id, output, min_confidence, provider, include_pages, allow_host))
 
 
 _PROVIDER_KEYS = {
@@ -140,7 +145,11 @@ async def _analyze(
     min_confidence: float | None,
     provider: str | None = None,
     include_pages: bool = False,
+    allow_host: list[str] | None = None,
 ) -> None:
+    from collections import Counter
+    from urllib.parse import urlparse
+
     from core.analyzer.endpoint_clusterer import EndpointClusterer
     from core.analyzer.event_classifier import EventClassifier
     from core.analyzer.tool_spec_builder import LLMProvider, ToolSpecBuilder
@@ -160,10 +169,11 @@ async def _analyze(
     with console.status("[bold green]Loading captured requests...[/]"):
         async with get_db() as db:
             full_session_id = await db.resolve_session_id(session_id)
+            session = await db.get_session(full_session_id) if full_session_id else None
             requests = await db.get_requests_for_session(full_session_id) if full_session_id else []
             all_specs = await db.get_tool_specs()
 
-    if not full_session_id:
+    if not full_session_id or session is None:
         console.print(f"[red]Session not found:[/] {session_id}")
         raise typer.Exit(1)
     session_id = full_session_id  # always use full UUID from here on
@@ -174,13 +184,29 @@ async def _analyze(
 
     console.print(f"Loaded [bold]{len(requests)}[/] requests")
 
-    classifier = EventClassifier(include_pages=include_pages)
+    classifier = EventClassifier(
+        include_pages=include_pages, site_url=session.url, allowed_hosts=allow_host
+    )
     filtered = classifier.classify(requests)
     rejected = len(requests) - len(filtered)
     console.print(
         f"Filtered to [bold]{len(filtered)}[/] useful requests "
         f"([dim]{rejected} rejected[/])"
     )
+    # Mention other sites that only failed the third-party check, so the user
+    # can bring one back if it turns out to be the app's real API
+    other_sites: Counter[str] = Counter()
+    for r in requests:
+        reasons = classifier.get_rejection_reason(r)
+        if reasons and all(reason.startswith("Third-party") for reason in reasons):
+            other_sites[urlparse(r.url).hostname or ""] += 1
+    if other_sites:
+        hosts = ", ".join(f"{h} ({n})" for h, n in other_sites.most_common(5))
+        more = f" and {len(other_sites) - 5} more" if len(other_sites) > 5 else ""
+        console.print(
+            f"[dim]Skipped calls to other sites: {hosts}{more}. "
+            "Keep one with --allow-host HOST.[/]"
+        )
 
     if not filtered:
         console.print("[yellow]No useful requests remain after filtering.[/]")
