@@ -40,8 +40,7 @@ async def dashboard(request: Request):
         all_tools = await db.get_generated_tools()
         executions = await db.get_executions(limit=10)
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "dashboard.html", {
         "sessions": sessions_raw,
         "projects": [{"id": p.id, "name": p.name} for p in projects],
         "total_sessions": len(sessions_raw),
