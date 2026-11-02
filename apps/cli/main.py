@@ -235,7 +235,14 @@ async def _analyze(
             # Bad key, used-up quota, unknown model: show the provider's message, not a traceback
             if not _is_provider_error(e):
                 raise
-            console.print(f"[red]{provider} API error:[/] {getattr(e, 'message', None) or e}")
+            message = str(getattr(e, "message", None) or e)
+            console.print(f"[red]{provider} API error:[/] {message}")
+            if provider == "gemini" and "quota" in message.lower():
+                console.print(
+                    "[yellow]Each Gemini model has its own free daily limit.[/] To use another "
+                    "one now, run: [bold]AUTOMCP_LLM_MODEL=gemini-flash-lite-latest "
+                    f"automcp analyze {session_id[:8]}[/]"
+                )
             raise typer.Exit(1)
 
     good_specs = [

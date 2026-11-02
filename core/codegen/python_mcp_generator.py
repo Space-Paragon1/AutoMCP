@@ -62,6 +62,9 @@ def _spec_data(spec: ToolSpec) -> dict:
         "request_mapping": spec.request_mapping,
         "response_type": spec.response_type,
         "body_encoding": spec.body_encoding,
+        "headers": spec.headers,
+        "csrf_field": spec.csrf_field,
+        "csrf_page": spec.csrf_page,
     }
     try:
         # Round-trip through strict JSON so only plain literals reach the template

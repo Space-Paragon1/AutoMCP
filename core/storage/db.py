@@ -142,6 +142,9 @@ class AsyncDatabase:
             "ALTER TABLE captured_requests ADD COLUMN resource_type TEXT",
             "ALTER TABLE tool_specs ADD COLUMN sample_url TEXT",
             "ALTER TABLE tool_specs ADD COLUMN body_encoding TEXT NOT NULL DEFAULT 'json'",
+            "ALTER TABLE tool_specs ADD COLUMN headers TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE tool_specs ADD COLUMN csrf_field TEXT",
+            "ALTER TABLE tool_specs ADD COLUMN csrf_page TEXT",
         ]:
             try:
                 await self._conn.execute(stmt)
@@ -305,8 +308,9 @@ class AsyncDatabase:
                 (spec_id, session_id, tool_name, purpose, method, url_template,
                  auth_strategy, csrf_strategy, inputs, request_mapping,
                  response_type, confidence, quality_score, created_at,
-                 approved, is_readonly, version, response_schema, sample_url, body_encoding)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 approved, is_readonly, version, response_schema, sample_url, body_encoding,
+                 headers, csrf_field, csrf_page)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 spec.spec_id,
@@ -329,6 +333,9 @@ class AsyncDatabase:
                 response_schema_json,
                 spec.sample_url,
                 spec.body_encoding,
+                json.dumps(spec.headers),
+                spec.csrf_field,
+                spec.csrf_page,
             ),
         )
         await self.conn.commit()
@@ -422,6 +429,9 @@ class AsyncDatabase:
             response_schema=response_schema,
             sample_url=row["sample_url"],
             body_encoding=row["body_encoding"] or "json",
+            headers=json.loads(row["headers"] or "{}"),
+            csrf_field=row["csrf_field"],
+            csrf_page=row["csrf_page"],
         )
 
     # -------------------------------------------------------------------------

@@ -31,6 +31,11 @@ NON_REPLAY_HEADERS = BROWSER_ONLY_HEADERS | {
 
 API_RESOURCE_TYPES = {"xhr", "fetch"}
 
+# Standard headers the HTTP client or the session state already provides
+_NOT_ENDPOINT_HEADERS = NON_REPLAY_HEADERS | AUTH_HEADERS | set(CSRF_HEADERS) | {
+    "user-agent", "accept-language", "referer",
+}
+
 
 def _host(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
@@ -38,6 +43,28 @@ def _host(url: str) -> str:
 
 def _replayable(name: str) -> bool:
     return not name.startswith(":") and name not in NON_REPLAY_HEADERS
+
+
+def endpoint_headers(request: CapturedRequest, host_headers: dict[str, str]) -> dict[str, str]:
+    """Headers this one call needs beyond what every call to its host gets.
+
+    Page scripts add markers like `x-requested-with`, `github-verified-fetch`
+    or a JSON `accept`, and browsers send `origin` on POSTs. Some sites refuse
+    state-changing calls without them. Auth, cookies and CSRF headers are left
+    out (they come from the session's login state, which gets refreshed), and
+    so is anything the host headers already cover, except a different accept.
+    """
+    out: dict[str, str] = {}
+    for name, value in request.request_headers.items():
+        key = name.lower()
+        if key.startswith((":", "sec-")) or key in _NOT_ENDPOINT_HEADERS:
+            continue
+        if key in host_headers and key != "accept":
+            continue
+        if key == "accept" and host_headers.get("accept") == value:
+            continue
+        out[key] = value
+    return out
 
 
 def collect_host_headers(requests: list[CapturedRequest]) -> dict[str, dict[str, str]]:

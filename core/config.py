@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = Field(default=60)
     # When a tool gets HTTP 401/403, renew the login in a hidden browser and retry once
     auto_relogin: bool = Field(default=True)
+    # Longest tool result sent to the AI, in characters (about 4 per token).
+    # Bigger results are shortened with a note; 0 turns this off.
+    max_response_chars: int = Field(default=20_000)
     log_level: str = Field(default="INFO")
     server_host: str = Field(default="127.0.0.1")
     server_port: int = Field(default=8000)

@@ -58,7 +58,15 @@ class ToolSpec(BaseModel):
     # A concrete recorded URL for this endpoint (used by drift checks and auth probes)
     sample_url: str | None = None
     # How the request body is encoded: JSON or classic HTML form encoding
-    body_encoding: Literal["json", "form"] = "json"
+    body_encoding: Literal["json", "form", "multipart"] = "json"
+    # Extra headers the page's own scripts sent with this call (origin,
+    # x-requested-with, vendor headers); some sites refuse requests without them
+    headers: dict[str, str] = Field(default_factory=dict)
+    # Classic web forms carry a one-time security token (Rails authenticity_token,
+    # Django csrfmiddlewaretoken). csrf_field names it; csrf_page is the page the
+    # form was on, loaded before each call to read a fresh token.
+    csrf_field: str | None = None
+    csrf_page: str | None = None
 
 
 class CapturedRequest(BaseModel):
