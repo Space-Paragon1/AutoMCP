@@ -213,6 +213,8 @@ Only the recorded site's own calls are analyzed (its subdomains count, so `app.e
 
 `--include-pages` keeps full HTML page loads, for server-rendered sites that don't have a JSON API. Re-running `analyze` replaces specs you haven't reviewed yet and keeps the ones you approved.
 
+**GraphQL sites.** Many modern sites send every action to one address, usually `/graphql`, and name the action inside the request. `analyze` recognises these calls and makes one tool per operation (`GetCountry`, `CreateIssue`, ...) instead of one tool for the whole address. The query text is copied exactly from the recording, so the AI only decides which variables become inputs. Variables that had the same value in every recorded call (page sizes, flags) are kept as they were. Queries are marked read-only, so Claude knows they don't change anything. Saved ("persisted") queries, GraphQL over GET, and several operations sent together in one call all work. When the site answers with GraphQL errors, the tool reports them as a failure. If the errors say you're logged out, AutoMCP renews the login like it does for HTTP 401.
+
 ---
 
 ### `review` — Approve specs interactively

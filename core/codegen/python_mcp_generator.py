@@ -66,6 +66,8 @@ def _spec_data(spec: ToolSpec) -> dict:
         "csrf_field": spec.csrf_field,
         "csrf_page": spec.csrf_page,
     }
+    if spec.graphql is not None:
+        data["graphql"] = spec.graphql.model_dump()
     try:
         # Round-trip through strict JSON so only plain literals reach the template
         return json.loads(json.dumps(data, allow_nan=False))
@@ -88,11 +90,11 @@ class PythonMcpGenerator:
 
         # Python needs required parameters before optional ones
         inputs = sorted(spec.inputs, key=lambda i: not i.required)
-        module_doc = (
-            f"AutoMCP generated tool: {spec.tool_name}\n\n{spec.purpose}\n\n"
-            f"{spec.method.upper()} {spec.url_template}"
-        )
-        docstring = f"{spec.purpose}\n\nHTTP: {spec.method.upper()} {spec.url_template}"
+        endpoint = f"{spec.method.upper()} {spec.url_template}"
+        if spec.graphql is not None:
+            endpoint += f" (GraphQL {spec.graphql.kind} {spec.graphql.operation})"
+        module_doc = f"AutoMCP generated tool: {spec.tool_name}\n\n{spec.purpose}\n\n{endpoint}"
+        docstring = f"{spec.purpose}\n\nHTTP: {endpoint}"
         if spec.is_readonly:
             docstring += "\nRead-only: this tool does not change data."
 

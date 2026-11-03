@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 import anthropic
 from pydantic import ValidationError
 
+from core.analyzer import graphql
 from core.analyzer.schema_inferrer import SchemaInferrer
 from core.auth.csrf import CSRF_FIELD_NAMES, CSRF_HEADERS
 from core.auth.headers import AUTH_HEADERS
@@ -66,7 +67,12 @@ Rules:
 7. If an API key header is present, set auth_strategy to "api_key"
 8. Set confidence based on: clarity of purpose, completeness of request data, action labels present
 9. Leave out clusters that aren't useful as tools (config, feature flags, polling, tracking,
-   page data for the site's own rendering). An empty "specs" list is a valid answer."""
+   page data for the site's own rendering). An empty "specs" list is a valid answer.
+10. A cluster with a "graphql" section is one GraphQL operation; the site sends all of its
+   operations to the same URL. Name the tool after what the operation does (operation
+   GetRepoIssues -> list_repo_issues). Map only the operation's variables, as
+   "variables.<name>" (nested with dots: "variables.input.title"). operationName, query and
+   extensions are filled in for you, and method and url_template must stay as given."""
 
 
 def _object(properties: dict[str, Any]) -> dict[str, Any]:
@@ -219,13 +225,43 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
     return out
 
 
+# Inline string arguments in a GraphQL query that look secret: login(password: "...")
+_SECRET_ARGUMENT = re.compile(
+    r'(\b\w*(?:password|passwd|secret|token|api_?key)\w*\s*:\s*)"(?:[^"\\]|\\.)*"', re.I
+)
+
+
+def _graphql_prompt(cluster: EndpointCluster, representative: CapturedRequest) -> dict | None:
+    """The operation a GraphQL cluster runs, with secrets removed."""
+    ops = graphql.operations(representative)
+    if cluster.graphql is None or not ops:
+        return None
+    payload = ops[0].payload
+    query = payload.get("query")
+    text = None
+    if isinstance(query, str):
+        text = " ".join(query.split())
+        text = _JWT.sub(REDACTED, _SECRET_ARGUMENT.sub(rf'\1"{REDACTED}"', text))
+        if len(text) > 1500:
+            text = text[:1500] + "...[truncated]"
+    variables = _redact_value(payload.get("variables"))
+    if len(json.dumps(variables)) > 1500:
+        variables = json.dumps(variables)[:1500] + "...[truncated]"
+    return {
+        "operation_name": cluster.graphql.operation,
+        "operation_type": cluster.graphql.kind,
+        "query": text,
+        "variables": variables,
+    }
+
+
 def _build_cluster_prompt(
     index: int,
     cluster: EndpointCluster,
     representative: CapturedRequest,
 ) -> dict[str, Any]:
     """Build a dict summarising a cluster for the LLM prompt."""
-    return {
+    summary: dict[str, Any] = {
         "cluster_index": index,
         "method": cluster.method,
         "url_template": cluster.url_template,
@@ -240,6 +276,13 @@ def _build_cluster_prompt(
             "response_body_sample": redact_body(representative.response_body),
         },
     }
+    operation = _graphql_prompt(cluster, representative)
+    if operation is not None:
+        summary["graphql"] = operation
+        # The body is the operation, shown in full above
+        summary["representative_request"]["body"] = None
+        summary["representative_request"]["url"] = _JWT.sub(REDACTED, cluster.url_template)
+    return summary
 
 
 def _body_encoding(request: CapturedRequest) -> str:
@@ -306,14 +349,19 @@ def _fixed_query(spec: ToolSpec, recorded: list[CapturedRequest]) -> str:
     return f"{spec.url_template}?{urlencode(fixed)}" if fixed else spec.url_template
 
 
-def _endpoint_key(spec: ToolSpec) -> tuple[str, str]:
-    """Same method and URL shape, whatever the placeholders are called."""
-    return spec.method.upper(), re.sub(r"\{[^}]*\}", "{}", spec.url_template)
+def endpoint_key(spec: ToolSpec) -> tuple[str, str, str | None]:
+    """Same method, URL shape (whatever the placeholders are called) and GraphQL operation."""
+    return (
+        spec.method.upper(),
+        re.sub(r"\{[^}]*\}", "{}", spec.url_template),
+        spec.graphql.operation if spec.graphql else None,
+    )
 
 
 def _score_quality(spec: ToolSpec) -> QualityScore:
     """Assign a quality score based on heuristics."""
-    method = spec.method.upper()
+    # A GraphQL query is sent as a POST but only reads
+    method = "GET" if spec.is_readonly else spec.method.upper()
 
     if method in ("POST", "PUT", "PATCH", "DELETE"):
         usefulness = 0.7
@@ -394,6 +442,10 @@ def _restore_literal_types(spec: ToolSpec, representative: CapturedRequest) -> N
         body = json.loads(representative.request_body)
     except (json.JSONDecodeError, ValueError):
         return
+    _restore_types_from(spec, body)
+
+
+def _restore_types_from(spec: ToolSpec, body: Any) -> None:
     if not isinstance(body, dict):
         return
     for field, value in spec.request_mapping.items():
@@ -410,6 +462,67 @@ def _restore_literal_types(spec: ToolSpec, representative: CapturedRequest) -> N
             continue
         if parsed == recorded:
             spec.request_mapping[field] = recorded
+
+
+_MISSING = object()
+
+
+def _leaves(value: dict[str, Any], prefix: str) -> list[tuple[str, Any]]:
+    """{"a": {"b": 1}, "c": [2]} -> [("prefix.a.b", 1), ("prefix.c", [2])]"""
+    out: list[tuple[str, Any]] = []
+    for key, item in value.items():
+        path = f"{prefix}.{key}"
+        if isinstance(item, dict) and item:
+            out.extend(_leaves(item, path))
+        else:
+            out.append((path, item))
+    return out
+
+
+def _at(value: Any, path: str) -> Any:
+    """The value at a dotted path below the top level ("variables.a.b"), or _MISSING."""
+    for part in path.split(".")[1:]:
+        if not isinstance(value, dict) or part not in value:
+            return _MISSING
+        value = value[part]
+    return value
+
+
+def _fill_graphql(spec: ToolSpec, rep: CapturedRequest, recorded: list[CapturedRequest]) -> None:
+    """Put a GraphQL call's fixed parts into the spec, straight from the recording.
+
+    The query text is long and must be exact, so it isn't left to the model: the
+    model only maps variables. A variable the model left out keeps its recorded
+    value when every recorded call used the same one (page sizes, flags), since
+    servers reject calls missing a required variable.
+    """
+    ops = graphql.operations(rep)
+    if spec.graphql is None or not ops:
+        return
+    payload = ops[0].payload
+    spec.request_mapping = {
+        k: v for k, v in spec.request_mapping.items()
+        if k == "variables" or k.startswith("variables.")
+    }
+    _restore_types_from(spec, payload)
+    mapped = list(spec.request_mapping)
+
+    fixed: dict[str, Any] = {k: v for k, v in payload.items() if k != "variables"}
+    variables = payload.get("variables")
+    if isinstance(variables, dict):
+        others = [
+            ops_[0].payload.get("variables")
+            for ops_ in (graphql.operations(r) for r in recorded) if ops_
+        ]
+        for path, value in _leaves(variables, "variables"):
+            if any(path == m or path.startswith(m + ".") or m.startswith(path + ".") for m in mapped):
+                continue
+            if _SECRET_KEY.search(path.rsplit(".", 1)[-1]):
+                continue  # A recorded token would be stale, and shouldn't sit in a tool file
+            if all(_at(other, path) == value for other in others):
+                fixed[path] = value
+    spec.request_mapping = {**fixed, **spec.request_mapping}
+    spec.is_readonly = spec.graphql.kind == "query"
 
 
 # ---------------------------------------------------------------------------
@@ -502,21 +615,27 @@ class ToolSpecBuilder:
         pairs = sorted(
             (pair for batch in results for pair in batch), key=lambda p: -p[1].confidence
         )
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, str | None]] = set()
         specs: list[ToolSpec] = []
         for index, spec in pairs:
-            if _endpoint_key(spec) in seen:
+            cluster = clusters[index] if index is not None and 0 <= index < len(clusters) else None
+            if cluster is not None and cluster.graphql is not None:
+                # Every operation shares one URL; the operation is what this tool runs
+                spec = spec.model_copy(update={
+                    "method": cluster.method,
+                    "url_template": cluster.url_template,
+                    "graphql": cluster.graphql,
+                })
+            if endpoint_key(spec) in seen:
                 continue
-            seen.add(_endpoint_key(spec))
+            seen.add(endpoint_key(spec))
             try:
                 spec = normalize_spec(spec, taken)
             except ValueError:
                 continue  # Unusable spec (bad method/URL); skip it
             spec.session_id = session_id
-            spec.quality_score = _score_quality(spec)
 
-            if index is not None and 0 <= index < len(clusters):
-                cluster = clusters[index]
+            if cluster is not None:
                 rep = requests_map.get(cluster.representative_request_id)
                 if rep is not None:
                     spec.sample_url = rep.url
@@ -532,6 +651,7 @@ class ToolSpecBuilder:
                         requests_map[rid] for rid in cluster.request_ids if rid in requests_map
                     ]
                     spec.url_template = _fixed_query(spec, recorded or [rep])
+                    _fill_graphql(spec, rep, recorded or [rep])
                 bodies = [
                     requests_map[rid].response_body
                     for rid in cluster.request_ids if rid in requests_map
@@ -539,6 +659,7 @@ class ToolSpecBuilder:
                 schema = inferrer.infer_from_responses(bodies)
                 if schema:
                     spec.response_schema = schema
+            spec.quality_score = _score_quality(spec)
             specs.append(spec)
         return specs
 

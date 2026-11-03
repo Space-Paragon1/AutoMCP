@@ -1727,7 +1727,7 @@ function renderSpecs() {
   const q = state.search.toLowerCase();
   tbody.innerHTML = filtered.map(s => {
     const method  = (s.method || 'GET').toUpperCase();
-    const url     = s.url_template || '';
+    const url     = (s.url_template || '') + (s.graphql ? ` · GraphQL ${s.graphql.operation}` : '');
     const conf    = parseFloat(s.confidence) || 0;
     const confPct = Math.round(conf * 100);
     const confCls = conf >= 0.8 ? 'high' : conf >= 0.6 ? 'medium' : 'low';
@@ -1962,12 +1962,13 @@ function renderRunner(toolName) {
     </div>`;
   }).join('');
 
-  const warning = method === 'GET' ? ''
+  const warning = method === 'GET' || tool.is_readonly ? ''
     : `<div class="runner-warning">Running this sends a real ${esc(method)} request to the site with your recorded login.</div>`;
+  const operation = tool.graphql ? ` · GraphQL ${tool.graphql.kind} ${tool.graphql.operation}` : '';
 
   body.innerHTML = `
     ${tool.purpose ? `<div class="runner-purpose">${esc(tool.purpose)}</div>` : ''}
-    <div class="runner-endpoint">${esc(method)} ${esc(tool.url_template || '')}</div>
+    <div class="runner-endpoint">${esc(method)} ${esc(tool.url_template || '')}${esc(operation)}</div>
     ${fields || '<div class="runner-hint">This tool takes no inputs.</div>'}
     ${warning}
     <div class="runner-actions">

@@ -5,7 +5,8 @@ import re
 from collections import defaultdict
 from urllib.parse import urlparse
 
-from core.storage.models import CapturedRequest, EndpointCluster
+from core.analyzer import graphql
+from core.storage.models import CapturedRequest, EndpointCluster, GraphQLInfo
 
 # Regex patterns that identify ID-like path segments
 UUID_PATTERN = re.compile(
@@ -128,19 +129,25 @@ def _merge_variable_segments(
 
 
 def _infer_body_schema(requests: list[CapturedRequest]) -> dict | None:
-    """Build a union schema of all JSON body keys across requests."""
+    """Build a union schema of all JSON body keys across requests.
+
+    For GraphQL calls this is the operation's variables, the part that changes.
+    """
     schema: dict[str, str] = {}
     for req in requests:
-        if not req.request_body:
-            continue
-        try:
-            body = json.loads(req.request_body)
+        ops = graphql.operations(req)
+        if ops:
+            bodies = [op.payload.get("variables") for op in ops]
+        else:
+            try:
+                bodies = [json.loads(req.request_body)] if req.request_body else []
+            except (json.JSONDecodeError, ValueError):
+                bodies = []
+        for body in bodies:
             if isinstance(body, dict):
                 for key, value in body.items():
                     if key not in schema:
                         schema[key] = type(value).__name__
-        except (json.JSONDecodeError, ValueError):
-            pass
     return schema if schema else None
 
 
@@ -171,15 +178,34 @@ class EndpointClusterer:
         Returns one EndpointCluster per unique (method, url_template) combination.
         """
         groups: dict[ClusterKey, list[CapturedRequest]] = {}
+        # GraphQL calls share one URL, so they group by operation instead.
+        # Batches should be split first (graphql.split_batches); one that
+        # wasn't is grouped under all of its operations' names together.
+        graphql_groups: dict[tuple[str, str, GraphQLInfo], list[CapturedRequest]] = {}
 
         for req in requests:
+            ops = graphql.operations(req)
+            if ops:
+                url = urlparse(req.url)._replace(query="", fragment="").geturl()
+                info = ops[0].info if len(ops) == 1 else GraphQLInfo(
+                    operation="+".join(op.info.operation for op in ops), batched=True,
+                )
+                graphql_groups.setdefault((req.method.upper(), url, info), []).append(req)
+                continue
             key = _cluster_key(req.method, req.url)
             groups.setdefault(key, []).append(req)
         groups = _merge_variable_segments(groups)
 
+        flat: list[tuple[str, str, GraphQLInfo | None, list[CapturedRequest]]] = [
+            (method, base_url + "/" + "/".join(segments), None, group_requests)
+            for (method, base_url, segments), group_requests in groups.items()
+        ] + [
+            (method, url, info, group_requests)
+            for (method, url, info), group_requests in graphql_groups.items()
+        ]
+
         clusters: list[EndpointCluster] = []
-        for (method, base_url, segments), group_requests in groups.items():
-            url_template = base_url + "/" + "/".join(segments)
+        for method, url_template, info, group_requests in flat:
 
             # Collect unique, non-None action labels
             action_labels: list[str] = list(
@@ -201,6 +227,7 @@ class EndpointClusterer:
                     representative_request_id=representative.id,
                     action_labels=action_labels,
                     body_schema=body_schema,
+                    graphql=info,
                 )
             )
 

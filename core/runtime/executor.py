@@ -6,6 +6,7 @@ every tool without regenerating it, and the generated files stay small.
 """
 from __future__ import annotations
 
+import copy
 import functools
 import json
 import re
@@ -67,10 +68,12 @@ def build_payload(spec: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
             # A fixed value the browser always sent (e.g. {"pos": "bottom"})
             payload[target] = source
 
+    # Inputs with no mapping are sent as-is; for GraphQL that means as variables
+    prefix = "variables." if spec.get("graphql") else ""
     for name, value in args.items():
         if name in in_url or name in mapped or value is None:
             continue
-        payload[name] = value
+        payload[prefix + name] = value
     return payload
 
 
@@ -159,6 +162,18 @@ def _nest(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _graphql_kwargs(spec: dict[str, Any], method: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Send a GraphQL operation the way the page did."""
+    operation = _nest(copy.deepcopy(payload))
+    if method in ("GET", "HEAD", "DELETE"):
+        # GraphQL over GET puts variables and extensions in the URL as JSON text
+        return {"params": {
+            k: v if isinstance(v, str) else json.dumps(v, separators=(",", ":"))
+            for k, v in operation.items()
+        }}
+    return {"json": [operation] if spec["graphql"].get("batched") else operation}
+
+
 def _body_kwargs(method: str, encoding: str | None, payload: dict[str, Any]) -> dict[str, Any]:
     if not payload:
         return {}
@@ -212,11 +227,60 @@ async def _fresh_form_token(
     return fallback
 
 
+# How GraphQL servers say the caller isn't logged in, inside an HTTP 200 answer
+_GRAPHQL_LOGGED_OUT_CODES = {
+    "UNAUTHENTICATED", "UNAUTHORIZED", "NOT_AUTHENTICATED", "AUTHENTICATION_ERROR",
+}
+_GRAPHQL_LOGGED_OUT_TEXT = (
+    "not authenticated", "unauthenticated", "not logged in", "must be logged in",
+    "login required", "authentication required", "requires authentication",
+)
+
+
+def _graphql_answer(response: httpx.Response, batched: bool) -> Any:
+    """The JSON a GraphQL server answered with (taken out of its batch), or None."""
+    try:
+        answer = response.json()
+    except ValueError:
+        return None
+    if batched and isinstance(answer, list) and len(answer) == 1:
+        return answer[0]
+    return answer
+
+
+def _graphql_errors(answer: Any) -> list[dict[str, Any]]:
+    if isinstance(answer, dict) and isinstance(answer.get("errors"), list):
+        return [e for e in answer["errors"] if isinstance(e, dict)]
+    return []
+
+
+def _graphql_logged_out(errors: list[dict[str, Any]]) -> bool:
+    for error in errors:
+        extensions = error.get("extensions")
+        code = str(extensions.get("code", "")) if isinstance(extensions, dict) else ""
+        message = str(error.get("message", "")).lower()
+        if code.upper() in _GRAPHQL_LOGGED_OUT_CODES or any(
+            text in message for text in _GRAPHQL_LOGGED_OUT_TEXT
+        ):
+            return True
+    return False
+
+
+def _graphql_explains_failure(spec: dict[str, Any], response: httpx.Response) -> bool:
+    """GraphQL servers often answer a bad call with HTTP 400 plus the reason; read it."""
+    if not spec.get("graphql") or response.status_code == 429:
+        return False
+    if not 400 <= response.status_code < 500:
+        return False
+    return bool(_graphql_errors(_graphql_answer(response, spec["graphql"].get("batched", False))))
+
+
 async def _send(spec: dict[str, Any], args: dict[str, Any]) -> Any:
     method = spec["method"].upper()
     url = build_url(spec["url_template"], args)
     payload = build_payload(spec, args)
     session_id = spec.get("session_id")
+    gql = spec.get("graphql")
     needs_form_token = bool(spec.get("csrf_field")) and method not in ("GET", "HEAD")
 
     async def _call(headers: dict[str, str], body_kwargs: dict[str, Any]) -> httpx.Response:
@@ -224,7 +288,7 @@ async def _send(spec: dict[str, Any], args: dict[str, Any]) -> Any:
             timeout=30.0, follow_redirects=True, transport=_transport
         ) as client:
             response = await client.request(method, url, headers=headers, **body_kwargs)
-        if response.status_code not in (401, 403):
+        if response.status_code not in (401, 403) and not _graphql_explains_failure(spec, response):
             response.raise_for_status()  # 429/5xx are retried by with_retry
         return response
 
@@ -240,20 +304,39 @@ async def _send(spec: dict[str, Any], args: dict[str, Any]) -> Any:
             token = await _fresh_form_token(spec, args, url, base)
             if token:
                 body[spec["csrf_field"]] = token
+        if gql:
+            body_kwargs = _graphql_kwargs(spec, method, body)
+        else:
+            body_kwargs = _body_kwargs(method, spec.get("body_encoding"), body)
         await _rate_limiter.acquire()
         response = await with_retry(
-            functools.partial(_call, headers, _body_kwargs(method, spec.get("body_encoding"), body)),
-            RetryConfig(max_attempts=3),
+            functools.partial(_call, headers, body_kwargs), RetryConfig(max_attempts=3),
         )
-        if response.status_code not in (401, 403):
-            return _parse_response(response, spec.get("response_type", "json"))
+        status = response.status_code
+        if status not in (401, 403):
+            if not gql:
+                return _parse_response(response, spec.get("response_type", "json"))
+            answer = _graphql_answer(response, gql.get("batched", False))
+            errors = _graphql_errors(answer)
+            if answer is None:
+                return _parse_response(response, spec.get("response_type", "json"))
+            if not _graphql_logged_out(errors):
+                if errors and answer.get("data") is None:
+                    reasons = "; ".join(str(e.get("message") or e)[:300] for e in errors[:5])
+                    raise ToolError(
+                        f"The site answered with GraphQL errors: {reasons}",
+                        status_code=status, retryable=False,
+                    )
+                # Partial data with errors is still useful; the AI sees both
+                return trim_json(answer, settings.max_response_chars)
+            status = 401  # Logged out, said in a GraphQL error rather than the HTTP status
         # Logged out: renew the login once in the background, then try again
         if not renew_tried:
             renew_tried = True
             if await _try_renew_login(session_id):
                 continue
-            raise _auth_error(response.status_code, session_id, renew_tried=False)
-        raise _auth_error(response.status_code, session_id, renew_tried=True)
+            raise _auth_error(status, session_id, renew_tried=False)
+        raise _auth_error(status, session_id, renew_tried=True)
 
 
 async def _log(tool_name: str, args: dict[str, Any], started: float,

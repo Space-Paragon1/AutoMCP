@@ -92,6 +92,8 @@ def _print_spec_summary(spec: ToolSpec) -> None:
     table.add_row("Purpose", spec.purpose)
     table.add_row("Method", f"[yellow]{spec.method}[/]")
     table.add_row("URL", spec.url_template)
+    if spec.graphql:
+        table.add_row("GraphQL", f"{spec.graphql.kind} {spec.graphql.operation}")
     table.add_row("Auth", spec.auth_strategy)
     table.add_row("Confidence", f"{spec.confidence:.2f}")
     table.add_row("Quality", composite)
