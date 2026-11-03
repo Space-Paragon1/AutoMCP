@@ -1,4 +1,5 @@
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -364,6 +365,91 @@ async def test_gemini_retry_sends_bad_answer_back_as_model_turn(monkeypatch):
     retry = fake.calls[1]["contents"]
     assert [c.role for c in retry] == ["user", "model", "user"]
     assert retry[1].parts[0].text == "not json"
+
+
+# ---------------------------------------------------------------- openai
+
+class FakeOpenAI:
+    """Stands in for openai.AsyncOpenAI; answers from a callback."""
+
+    def __init__(self, respond):
+        self.calls = []
+        self._respond = respond
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    async def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        prompt = kwargs["messages"][1]["content"]
+        clusters = json.loads(prompt.split("Clusters:\n", 1)[1].rsplit("\n\nReturn", 1)[0])
+        text, finish = self._respond(clusters)
+        message = SimpleNamespace(content=text)
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason=finish, message=message)])
+
+
+def _openai_builder(monkeypatch, respond, **kwargs):
+    fake = FakeOpenAI(respond)
+    # The openai package is optional, so the test doesn't need it installed
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=lambda api_key: fake))
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "claude-opus-5-5")
+    return ToolSpecBuilder(provider=LLMProvider.OPENAI, **kwargs), fake
+
+
+def test_spec_schema_follows_openai_strict_mode_rules():
+    """OpenAI's strict mode rejects a schema whose objects allow extra or optional keys."""
+    def objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                yield node
+            for value in node.values():
+                yield from objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from objects(value)
+
+    found = list(objects(TOOL_SPECS_SCHEMA))
+    assert len(found) == 4  # The answer, a spec, an input, a request field
+    for obj in found:
+        assert obj["additionalProperties"] is False
+        assert sorted(obj["required"]) == sorted(obj["properties"])
+
+
+async def test_openai_builds_specs_and_splits_truncated_batches(monkeypatch):
+    clusters, reqs = _clusters(4)
+
+    def respond(cs):
+        if len(cs) > 1:
+            return '[{"cluster_index": 0, "tool_na', "length"
+        return json.dumps({"specs": [_spec_for(c) for c in cs]}), "stop"
+
+    builder, fake = _openai_builder(monkeypatch, respond, batch_size=4)
+    specs = await builder.build_specs(clusters, reqs, "sess")
+
+    assert len(specs) == 4
+    # A Claude model name in AUTOMCP_LLM_MODEL must not be sent to OpenAI
+    assert {c["model"] for c in fake.calls} == {"gpt-4o"}
+    first = fake.calls[0]
+    assert first["messages"][0] == {"role": "system", "content": SYSTEM_PROMPT}
+    assert first["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "tool_specs", "strict": True, "schema": TOOL_SPECS_SCHEMA},
+    }
+
+
+async def test_openai_retry_sends_bad_answer_back_as_assistant_turn(monkeypatch):
+    clusters, reqs = _clusters(1)
+    answers = iter(["not json", None])
+
+    def respond(cs):
+        return next(answers) or json.dumps({"specs": [_spec_for(c) for c in cs]}), "stop"
+
+    builder, fake = _openai_builder(monkeypatch, respond)
+    specs = await builder.build_specs(clusters, reqs, "sess")
+
+    assert [s.tool_name for s in specs] == ["tool0"]
+    retry = fake.calls[1]["messages"]
+    assert [m["role"] for m in retry] == ["system", "user", "assistant", "user"]
+    assert retry[2]["content"] == "not json"
 
 
 # ---------------------------------------------------------------- real-site fixes (GitHub)

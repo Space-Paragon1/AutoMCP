@@ -119,7 +119,7 @@ REDACTED = "<redacted>"
 _SECRET_KEY = re.compile(
     r"password|passwd|secret|token|otp|credential|api[_-]?key|authorization|^auth$"
     r"|session[_-]?id|^sid$|signature",
-    re.I,
+    re.IGNORECASE,
 )
 _JWT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
 _INTERESTING_HEADERS = {"content-type", "accept", "cookie", "x-requested-with"}
@@ -174,7 +174,7 @@ def _redact_value(value: Any) -> Any:
 
 _MULTIPART_FIELD = re.compile(
     r'Content-Disposition: form-data; name="([^"]*)"[^\r\n]*\r?\n(?:[^\r\n]+\r?\n)*\r?\n(.*?)\r?\n--',
-    re.S,
+    re.DOTALL,
 )
 
 
@@ -227,7 +227,7 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
 
 # Inline string arguments in a GraphQL query that look secret: login(password: "...")
 _SECRET_ARGUMENT = re.compile(
-    r'(\b\w*(?:password|passwd|secret|token|api_?key)\w*\s*:\s*)"(?:[^"\\]|\\.)*"', re.I
+    r'(\b\w*(?:password|passwd|secret|token|api_?key)\w*\s*:\s*)"(?:[^"\\]|\\.)*"', re.IGNORECASE
 )
 
 
@@ -408,14 +408,15 @@ def _parse_specs(raw_text: str) -> list[tuple[int | None, ToolSpec]]:
     free-text format) is accepted too.
     """
     data = _load_json(raw_text)
+    # Wrong shapes raise ValueError, not TypeError: _call_llm retries on ValueError
     if isinstance(data, dict):
-        data = data["specs"] if "specs" in data else [data]
+        data = data.get("specs", [data])
     if not isinstance(data, list):
-        raise ValueError(f"Expected a list of specs, got {type(data).__name__}")
+        raise ValueError(f"Expected a list of specs, got {type(data).__name__}")  # noqa: TRY004
     parsed = []
     for item in data:
         if not isinstance(item, dict):
-            raise ValueError(f"Expected an object, got {type(item).__name__}")
+            raise ValueError(f"Expected an object, got {type(item).__name__}")  # noqa: TRY004
         index = item.pop("cluster_index", None)
         mapping = item.get("request_mapping")
         if isinstance(mapping, list):
@@ -554,7 +555,7 @@ class ToolSpecBuilder:
                 import openai
                 self._openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
             except ImportError:
-                raise ImportError("Install openai: pip install openai")
+                raise ImportError('Install the OpenAI SDK: pip install -e ".[openai]"') from None
         elif provider == LLMProvider.GEMINI:
             self.model = configured if configured.startswith("gemini") else GEMINI_DEFAULT_MODEL
             try:

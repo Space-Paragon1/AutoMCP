@@ -41,9 +41,8 @@ class CodeValidator:
                 for alias in node.names:
                     if alias.name not in ALLOWED_IMPORTS:
                         errors.append(f"Unexpected import: {alias.name}")
-            elif isinstance(node, ast.ImportFrom):
-                if node.module not in ALLOWED_IMPORTS:
-                    errors.append(f"Unexpected import: from {node.module}")
+            elif isinstance(node, ast.ImportFrom) and node.module not in ALLOWED_IMPORTS:
+                errors.append(f"Unexpected import: from {node.module}")
 
         # --- Dangerous pattern check ---
         for node in ast.walk(tree):

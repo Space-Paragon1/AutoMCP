@@ -1,0 +1,37 @@
+# Runs the code checks and the tests on every push to main and on every pull request.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported version (pyproject.toml), the one used locally, and the newest
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install AutoMCP
+        run: pip install -e ".[dev,gemini]"
+
+      - name: Check code style (ruff)
+        run: ruff check .
+
+      # The login-renewal tests drive a real headless browser
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run tests
+        run: pytest -q

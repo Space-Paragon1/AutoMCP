@@ -71,7 +71,7 @@ class HeaderReplayRules:
         self.rules: list[ReplayRule] = rules or []
 
     @classmethod
-    def analyze(cls, requests: list[CapturedRequest]) -> "HeaderReplayRules":
+    def analyze(cls, requests: list[CapturedRequest]) -> HeaderReplayRules:
         """
         Identify headers that are consistently present across requests
         and classify them as auth or static.

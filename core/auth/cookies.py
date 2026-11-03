@@ -5,7 +5,6 @@ import json
 from playwright.async_api import BrowserContext
 
 
-
 class CookieStrategy:
     """Handles cookie-based authentication extraction and replay."""
 

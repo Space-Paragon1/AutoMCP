@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -112,45 +113,33 @@ class CsrfStrategy:
 
         if rule.source == "body" and response_body:
             # Try to extract from HTML response body via meta tag or hidden input
-            try:
-                body_text = response_body.decode("utf-8", errors="ignore")
-                import re
+            body_text = response_body.decode("utf-8", errors="ignore")
+            key = re.escape(rule.source_key)
 
-                # Look for <meta name="csrf-token" content="...">
-                meta_match = re.search(
-                    r'<meta[^>]+name=["\']' + re.escape(rule.source_key) + r'["\'][^>]+content=["\']([^"\']+)',
-                    body_text,
-                    re.IGNORECASE,
-                )
-                if meta_match:
-                    return meta_match.group(1)
+            # Look for <meta name="csrf-token" content="...">
+            meta_match = re.search(
+                r'<meta[^>]+name=["\']' + key + r'["\'][^>]+content=["\']([^"\']+)',
+                body_text,
+                re.IGNORECASE,
+            )
+            if meta_match:
+                return meta_match.group(1)
 
-                # Look for hidden input
-                input_match = re.search(
-                    r'<input[^>]+name=["\']' + re.escape(rule.source_key) + r'["\'][^>]+value=["\']([^"\']+)',
-                    body_text,
-                    re.IGNORECASE,
-                )
-                if input_match:
-                    return input_match.group(1)
-            except Exception:
-                pass
-            return None
+            # Look for hidden input
+            input_match = re.search(
+                r'<input[^>]+name=["\']' + key + r'["\'][^>]+value=["\']([^"\']+)',
+                body_text,
+                re.IGNORECASE,
+            )
+            return input_match.group(1) if input_match else None
 
         if rule.source == "meta" and response_body:
-            try:
-                body_text = response_body.decode("utf-8", errors="ignore")
-                import re
-
-                meta_match = re.search(
-                    r'<meta[^>]+name=["\']csrf[^"\']*["\'][^>]+content=["\']([^"\']+)',
-                    body_text,
-                    re.IGNORECASE,
-                )
-                if meta_match:
-                    return meta_match.group(1)
-            except Exception:
-                pass
-            return None
+            body_text = response_body.decode("utf-8", errors="ignore")
+            meta_match = re.search(
+                r'<meta[^>]+name=["\']csrf[^"\']*["\'][^>]+content=["\']([^"\']+)',
+                body_text,
+                re.IGNORECASE,
+            )
+            return meta_match.group(1) if meta_match else None
 
         return None

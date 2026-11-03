@@ -8,39 +8,39 @@ from core.storage.models import CapturedRequest
 # Heuristic URL patterns mapped to human-readable action labels
 # Each entry: (method, url_regex, label)
 URL_HEURISTICS: list[tuple[str, re.Pattern[str], str]] = [
-    ("POST", re.compile(r"/login", re.I), "submit login form"),
-    ("POST", re.compile(r"/logout", re.I), "submit logout"),
-    ("POST", re.compile(r"/sign[-_]?in", re.I), "submit sign-in form"),
-    ("POST", re.compile(r"/sign[-_]?up", re.I), "submit sign-up form"),
-    ("POST", re.compile(r"/register", re.I), "submit registration form"),
-    ("POST", re.compile(r"/auth", re.I), "authenticate"),
-    ("POST", re.compile(r"/tokens?", re.I), "request auth token"),
-    ("POST", re.compile(r"/password", re.I), "change password"),
-    ("POST", re.compile(r"/reset", re.I), "submit password reset"),
-    ("POST", re.compile(r"/search", re.I), "submit search"),
-    ("GET", re.compile(r"/search", re.I), "search"),
-    ("POST", re.compile(r"/cards?", re.I), "create card"),
-    ("POST", re.compile(r"/boards?", re.I), "create board"),
-    ("POST", re.compile(r"/lists?", re.I), "create list"),
-    ("POST", re.compile(r"/tasks?", re.I), "create task"),
-    ("POST", re.compile(r"/issues?", re.I), "create issue"),
-    ("POST", re.compile(r"/comments?", re.I), "post comment"),
-    ("POST", re.compile(r"/messages?", re.I), "send message"),
-    ("POST", re.compile(r"/posts?", re.I), "create post"),
-    ("POST", re.compile(r"/upload", re.I), "upload file"),
-    ("POST", re.compile(r"/import", re.I), "import data"),
-    ("POST", re.compile(r"/export", re.I), "export data"),
-    ("PUT", re.compile(r"/.+", re.I), "update resource"),
-    ("PATCH", re.compile(r"/.+", re.I), "update resource"),
-    ("DELETE", re.compile(r"/cards?/", re.I), "delete card"),
-    ("DELETE", re.compile(r"/tasks?/", re.I), "delete task"),
-    ("DELETE", re.compile(r"/items?/", re.I), "delete item"),
-    ("DELETE", re.compile(r"/.+", re.I), "delete resource"),
-    ("GET", re.compile(r"/users?/me", re.I), "get current user"),
-    ("GET", re.compile(r"/profile", re.I), "get profile"),
-    ("GET", re.compile(r"/settings", re.I), "get settings"),
-    ("GET", re.compile(r"/dashboard", re.I), "get dashboard"),
-    ("GET", re.compile(r"/notifications?", re.I), "get notifications"),
+    ("POST", re.compile(r"/login", re.IGNORECASE), "submit login form"),
+    ("POST", re.compile(r"/logout", re.IGNORECASE), "submit logout"),
+    ("POST", re.compile(r"/sign[-_]?in", re.IGNORECASE), "submit sign-in form"),
+    ("POST", re.compile(r"/sign[-_]?up", re.IGNORECASE), "submit sign-up form"),
+    ("POST", re.compile(r"/register", re.IGNORECASE), "submit registration form"),
+    ("POST", re.compile(r"/auth", re.IGNORECASE), "authenticate"),
+    ("POST", re.compile(r"/tokens?", re.IGNORECASE), "request auth token"),
+    ("POST", re.compile(r"/password", re.IGNORECASE), "change password"),
+    ("POST", re.compile(r"/reset", re.IGNORECASE), "submit password reset"),
+    ("POST", re.compile(r"/search", re.IGNORECASE), "submit search"),
+    ("GET", re.compile(r"/search", re.IGNORECASE), "search"),
+    ("POST", re.compile(r"/cards?", re.IGNORECASE), "create card"),
+    ("POST", re.compile(r"/boards?", re.IGNORECASE), "create board"),
+    ("POST", re.compile(r"/lists?", re.IGNORECASE), "create list"),
+    ("POST", re.compile(r"/tasks?", re.IGNORECASE), "create task"),
+    ("POST", re.compile(r"/issues?", re.IGNORECASE), "create issue"),
+    ("POST", re.compile(r"/comments?", re.IGNORECASE), "post comment"),
+    ("POST", re.compile(r"/messages?", re.IGNORECASE), "send message"),
+    ("POST", re.compile(r"/posts?", re.IGNORECASE), "create post"),
+    ("POST", re.compile(r"/upload", re.IGNORECASE), "upload file"),
+    ("POST", re.compile(r"/import", re.IGNORECASE), "import data"),
+    ("POST", re.compile(r"/export", re.IGNORECASE), "export data"),
+    ("PUT", re.compile(r"/.+", re.IGNORECASE), "update resource"),
+    ("PATCH", re.compile(r"/.+", re.IGNORECASE), "update resource"),
+    ("DELETE", re.compile(r"/cards?/", re.IGNORECASE), "delete card"),
+    ("DELETE", re.compile(r"/tasks?/", re.IGNORECASE), "delete task"),
+    ("DELETE", re.compile(r"/items?/", re.IGNORECASE), "delete item"),
+    ("DELETE", re.compile(r"/.+", re.IGNORECASE), "delete resource"),
+    ("GET", re.compile(r"/users?/me", re.IGNORECASE), "get current user"),
+    ("GET", re.compile(r"/profile", re.IGNORECASE), "get profile"),
+    ("GET", re.compile(r"/settings", re.IGNORECASE), "get settings"),
+    ("GET", re.compile(r"/dashboard", re.IGNORECASE), "get dashboard"),
+    ("GET", re.compile(r"/notifications?", re.IGNORECASE), "get notifications"),
 ]
 
 
@@ -115,8 +115,6 @@ def _is_id_like(segment: str) -> bool:
     """Return True if a URL segment looks like a dynamic ID."""
     if re.match(r'^\d+$', segment):
         return True
-    if re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', segment, re.I):
+    if re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', segment, re.IGNORECASE):
         return True
-    if re.match(r'^[0-9a-f]{8,}$', segment, re.I):
-        return True
-    return False
+    return bool(re.match(r'^[0-9a-f]{8,}$', segment, re.IGNORECASE))

@@ -10,11 +10,11 @@ from core.storage.models import CapturedRequest, EndpointCluster, GraphQLInfo
 
 # Regex patterns that identify ID-like path segments
 UUID_PATTERN = re.compile(
-    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE
 )
 INTEGER_PATTERN = re.compile(r'^\d+$')
 # Hex IDs (e.g. Mongo/Trello ObjectIds). Must contain a digit so plain words don't match.
-HEX_PATTERN = re.compile(r'^(?=.*\d)[0-9a-f]{8,}$', re.I)
+HEX_PATTERN = re.compile(r'^(?=.*\d)[0-9a-f]{8,}$', re.IGNORECASE)
 # Base58/base62-style IDs: long, and a mix of letters and digits
 BASE58_PATTERN = re.compile(r'^(?=.*\d)(?=.*[A-Za-z])[A-HJ-NP-Za-km-z1-9]{20,}$')
 
@@ -79,7 +79,7 @@ def _cluster_key(method: str, url: str) -> ClusterKey:
 def _looks_like_name(segment: str) -> bool:
     """Names (AutoMCP, Resume-Analyzer, team42) rather than route words
     (issues, branch-infobar) or API versions (v2)."""
-    if re.fullmatch(r"v\d+(\.\d+)*", segment, re.I):
+    if re.fullmatch(r"v\d+(\.\d+)*", segment, re.IGNORECASE):
         return False
     return bool(re.search(r"[A-Z0-9]", segment))
 

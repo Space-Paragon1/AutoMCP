@@ -4,7 +4,8 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 from urllib.parse import urlparse
 
 from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
@@ -19,7 +20,6 @@ from core.recorder.action_mapper import ActionMapper
 from core.recorder.network_capture import NetworkCapture
 from core.storage.db import get_db
 from core.storage.models import CapturedRequest, RecordingSession, utcnow
-
 
 SNAPSHOT_INTERVAL_SECONDS = 3.0
 MAX_STORAGE_VALUE_CHARS = 8192
@@ -42,7 +42,7 @@ _RESTORE_STORAGE_JS = """(([origin, data]) => {
     } catch (e) {}
 })(%s)"""
 
-USERNAME_SELECTORS = ", ".join([
+_USERNAME_FIELDS = (
     'input[autocomplete="username"]',
     'input[type="email"]',
     'input[name*="user" i]',
@@ -51,7 +51,8 @@ USERNAME_SELECTORS = ", ".join([
     'input[id*="user" i]',
     'input[id*="email" i]',
     'input[type="text"]',
-])
+)
+USERNAME_SELECTORS = ", ".join(_USERNAME_FIELDS)
 PASSWORD_SELECTOR = 'input[type="password"]'
 
 
@@ -119,7 +120,7 @@ class BrowserSession:
     def session_id(self) -> str:
         return self._session_id
 
-    async def __aenter__(self) -> "BrowserSession":
+    async def __aenter__(self) -> Self:
         self._playwright = await async_playwright().start()
 
         launch_kwargs: dict[str, Any] = {"headless": self._headless}
@@ -286,7 +287,7 @@ class BrowserSession:
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: Any,
+        exc_tb: TracebackType | None,
     ) -> None:
         ended_at = utcnow()
 

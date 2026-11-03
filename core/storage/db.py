@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 import aiosqlite
 
@@ -17,6 +18,7 @@ from core.storage.models import (
     ToolExecution,
     ToolSpec,
 )
+
 
 def _current_tool_path(stored: str) -> str:
     """Tool files are saved with a full path. If the project folder has since
@@ -158,7 +160,7 @@ class AsyncDatabase:
         ]:
             try:
                 await self._conn.execute(stmt)
-            except Exception:
+            except aiosqlite.OperationalError:
                 pass  # Column already exists
         await self._conn.commit()
 
@@ -167,11 +169,16 @@ class AsyncDatabase:
             await self._conn.close()
             self._conn = None
 
-    async def __aenter__(self) -> "AsyncDatabase":
+    async def __aenter__(self) -> Self:
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         await self.close()
 
     @property
@@ -220,6 +227,35 @@ class AsyncDatabase:
             row = await cursor.fetchone()
         return row["id"] if row else None
 
+    async def find_session_ids(self, prefix: str) -> list[str]:
+        """Full IDs of every session whose ID starts with *prefix* (oldest first)."""
+        if not prefix:
+            return []
+        async with self.conn.execute(
+            "SELECT id FROM sessions WHERE substr(id, 1, ?) = ? ORDER BY started_at",
+            (len(prefix), prefix),
+        ) as cursor:
+            return [row["id"] for row in await cursor.fetchall()]
+
+    async def count_requests(self, session_id: str) -> int:
+        async with self.conn.execute(
+            "SELECT COUNT(*) FROM captured_requests WHERE session_id = ?", (session_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    async def delete_records(self, session_ids: list[str], spec_ids: list[str]) -> None:
+        """Delete specs (with their generated-tool records) and whole sessions
+        (with their requests and clusters), in one transaction."""
+        specs = [(s,) for s in spec_ids]
+        sessions = [(s,) for s in session_ids]
+        await self.conn.executemany("DELETE FROM generated_tools WHERE spec_id = ?", specs)
+        await self.conn.executemany("DELETE FROM tool_specs WHERE spec_id = ?", specs)
+        await self.conn.executemany("DELETE FROM endpoint_clusters WHERE session_id = ?", sessions)
+        await self.conn.executemany("DELETE FROM captured_requests WHERE session_id = ?", sessions)
+        await self.conn.executemany("DELETE FROM sessions WHERE id = ?", sessions)
+        await self.conn.commit()
+
     async def get_session(self, session_id: str) -> RecordingSession | None:
         full_id = await self.resolve_session_id(session_id)
         if full_id is None:
@@ -237,7 +273,7 @@ class AsyncDatabase:
             ended_at=_dt(row["ended_at"]),
             browser_context_state=json.loads(row["browser_context_state"]),
             request_count=row["request_count"],
-            project_id=row["project_id"] if "project_id" in row.keys() else None,
+            project_id=row["project_id"],
         )
 
     # -------------------------------------------------------------------------
@@ -360,9 +396,7 @@ class AsyncDatabase:
         values = []
         for field, value in updates.items():
             set_clauses.append(f"{field} = ?")
-            if field == "approved":
-                values.append(int(value))
-            elif field == "is_readonly":
+            if field == "approved" or field == "is_readonly":
                 values.append(int(value))
             elif field == "response_schema":
                 values.append(json.dumps(value) if value is not None else None)
