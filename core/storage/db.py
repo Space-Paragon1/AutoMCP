@@ -18,6 +18,15 @@ from core.storage.models import (
     ToolSpec,
 )
 
+def _current_tool_path(stored: str) -> str:
+    """Tool files are saved with a full path. If the project folder has since
+    moved, use the file with the same name in the current tools folder."""
+    if not stored or Path(stored).exists():
+        return stored
+    moved = settings.generated_tools_dir / Path(stored).name
+    return str(moved) if moved.exists() else stored
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
@@ -482,7 +491,7 @@ class AsyncDatabase:
                 id=row["id"],
                 spec_id=row["spec_id"],
                 tool_name=row["tool_name"],
-                file_path=row["file_path"],
+                file_path=_current_tool_path(row["file_path"]),
                 generated_at=datetime.fromisoformat(row["generated_at"]),
                 validation_status=row["validation_status"],
                 validation_errors=json.loads(row["validation_errors"]),
