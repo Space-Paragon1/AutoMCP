@@ -253,3 +253,25 @@ def test_analysis_finds_the_form_token_field_and_page():
                       '--b\r\nContent-Disposition: form-data; name="context"\r\n\r\nother\r\n--b--'),
     )
     assert _form_csrf(spec, rep) == ("authenticity_token", "https://x.com/me/{name}?tab=code")
+
+
+async def test_tools_are_found_after_the_project_folder_moves():
+    from apps.cli.main import _generate
+    from core.config import settings
+
+    session, _ = await _seed([dict(
+        tool_name="get_board", purpose="Get a board", method="GET",
+        url_template="https://app.example.com/api/boards/{board_id}",
+        inputs=[ToolInput(name="board_id")],
+    )])
+    await _generate(session.id[:8], None)
+    async with get_db() as db:
+        [tool] = await db.get_generated_tools()
+        # Pretend the tool was generated while the project lived somewhere else
+        await db.conn.execute(
+            "UPDATE generated_tools SET file_path = ?",
+            ("/old/place/generated/tools/get_board.py",),
+        )
+        await db.conn.commit()
+        [moved] = await db.get_generated_tools()
+    assert moved.file_path == str(settings.generated_tools_dir / "get_board.py")
