@@ -108,7 +108,7 @@ Any site works. pokeapi and Wikipedia are just easy places to start.
 - **Sites you log in to work too.** Log in while recording, and the tools reuse that login (see [Auth management](#auth-management)).
 - **"No useful requests remain after filtering"** means the site didn't make any API calls while you recorded. Record again and use the site more, or run `analyze` with `--include-pages` for sites that load whole pages instead of calling an API.
 - **API on another domain?** Keep those calls with `analyze --allow-host api.thatdomain.com`.
-- **Not supported well yet:** sites that send every action to one address (GraphQL). Each action should become its own tool, but today they get grouped together.
+- **GraphQL sites work too.** Many sites send every action to one address (GraphQL). Each action still becomes its own tool (see [`analyze`](#analyze--generate-tool-specs-with-an-llm)).
 
 ---
 
@@ -227,13 +227,13 @@ automcp analyze <session_id> --allow-host api.partner.com   # keep calls to anot
 
 Filters out noise (analytics, trackers, static assets, page loads, redirects, errors), clusters endpoints by URL pattern, then calls the LLM (Claude, Gemini or OpenAI; see [Multi-model support](#multi-model-support)) to produce structured `ToolSpec` JSON for each endpoint — not raw code. Every provider is held to a fixed JSON schema (structured outputs), so answers can't come back malformed. Endpoints are sent in batches, so large sessions work. Specs are saved to `generated/specs/` and the database.
 
-Requests that are part of logging in (login pages, 2FA polling, anything sending a password) and endpoints that hand out tokens are never turned into tools. Names that vary in addresses become inputs: starring two repos gives one `star_repository(name)` tool, not two.
+Requests that are part of logging in (login pages, 2FA polling, anything sending a password) and endpoints that hand out tokens are never turned into tools. Names that vary in addresses become inputs: starring two repos gives one `star_repository(owner, repository)` tool, not two. Account, repository and project names count as inputs even if you only used one, so the tool also works for other repos.
 
 Only the recorded site's own calls are analyzed (its subdomains count, so `app.example.com` keeps `api.example.com`). Calls to other sites — fonts, chat widgets, payment forms, ads — are skipped, and `analyze` lists the ones it skipped. A call to another site that carries an auth header (a hosted backend like Supabase or Firebase) is kept. If the app's real API lives on another domain, keep it with `--allow-host`.
 
 `--include-pages` keeps full HTML page loads, for server-rendered sites that don't have a JSON API. Re-running `analyze` replaces specs you haven't reviewed yet and keeps the ones you approved.
 
-**GraphQL sites.** Many modern sites send every action to one address, usually `/graphql`, and name the action inside the request. `analyze` recognises these calls and makes one tool per operation (`GetCountry`, `CreateIssue`, ...) instead of one tool for the whole address. The query text is copied exactly from the recording, so the AI only decides which variables become inputs. Variables that had the same value in every recorded call (page sizes, flags) are kept as they were. Queries are marked read-only, so Claude knows they don't change anything. Saved ("persisted") queries, GraphQL over GET, and several operations sent together in one call all work. When the site answers with GraphQL errors, the tool reports them as a failure. If the errors say you're logged out, AutoMCP renews the login like it does for HTTP 401.
+**GraphQL sites.** Many modern sites send every action to one address, usually `/graphql`, and name the action inside the request. `analyze` recognises these calls and makes one tool per operation (`GetCountry`, `CreateIssue`, ...) instead of one tool for the whole address. The query text is copied exactly from the recording, so the AI only decides which variables become inputs. Variables that had the same value in every recorded call (page sizes, flags) are kept as they were. Queries are marked read-only, so Claude knows they don't change anything. Saved ("persisted") queries, GraphQL over GET, and several operations sent together in one call all work. Operations named in the address instead of the request, the way X does it (`/i/api/graphql/<id>/UserByScreenName`), are recognised too. Saved queries are identified by an ID or hash, and some sites change these when they update, so record again if a tool that worked starts failing. When the site answers with GraphQL errors, the tool reports them as a failure. If the errors say you're logged out, AutoMCP renews the login like it does for HTTP 401.
 
 ---
 
