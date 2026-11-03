@@ -4,6 +4,7 @@ import ipaddress
 import re
 from urllib.parse import urlparse
 
+from core.analyzer import graphql
 from core.auth.headers import AUTH_HEADERS
 from core.config import settings
 from core.storage.models import CapturedRequest
@@ -150,7 +151,10 @@ class EventClassifier:
             reasons.append("Blocked domain (analytics/tracking)")
         if self._is_blocked_pattern(request.url):
             reasons.append("Tracking or site-internal URL pattern")
-        if self._is_auth_flow(request.url):
+        if self._is_auth_flow(request.url) or any(
+            graphql.is_login_or_token(op.info.operation)
+            for op in graphql.operations(request) or ()
+        ):
             reasons.append("Login step or token endpoint (never a tool)")
         if request.response_status in (404, 405, 410):
             reasons.append(f"Failed request (HTTP {request.response_status})")

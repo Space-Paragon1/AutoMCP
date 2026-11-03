@@ -154,6 +154,7 @@ class AsyncDatabase:
             "ALTER TABLE tool_specs ADD COLUMN headers TEXT NOT NULL DEFAULT '{}'",
             "ALTER TABLE tool_specs ADD COLUMN csrf_field TEXT",
             "ALTER TABLE tool_specs ADD COLUMN csrf_page TEXT",
+            "ALTER TABLE tool_specs ADD COLUMN graphql TEXT",
         ]:
             try:
                 await self._conn.execute(stmt)
@@ -318,8 +319,8 @@ class AsyncDatabase:
                  auth_strategy, csrf_strategy, inputs, request_mapping,
                  response_type, confidence, quality_score, created_at,
                  approved, is_readonly, version, response_schema, sample_url, body_encoding,
-                 headers, csrf_field, csrf_page)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 headers, csrf_field, csrf_page, graphql)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 spec.spec_id,
@@ -345,6 +346,7 @@ class AsyncDatabase:
                 json.dumps(spec.headers),
                 spec.csrf_field,
                 spec.csrf_page,
+                spec.graphql.model_dump_json() if spec.graphql else None,
             ),
         )
         await self.conn.commit()
@@ -405,7 +407,7 @@ class AsyncDatabase:
 
     @staticmethod
     def _spec_from_row(row: aiosqlite.Row) -> ToolSpec:
-        from core.storage.models import QualityScore, ToolInput
+        from core.storage.models import GraphQLInfo, QualityScore, ToolInput
 
         quality = None
         if row["quality_score"]:
@@ -441,6 +443,7 @@ class AsyncDatabase:
             headers=json.loads(row["headers"] or "{}"),
             csrf_field=row["csrf_field"],
             csrf_page=row["csrf_page"],
+            graphql=GraphQLInfo.model_validate_json(row["graphql"]) if row["graphql"] else None,
         )
 
     # -------------------------------------------------------------------------

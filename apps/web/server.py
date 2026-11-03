@@ -133,6 +133,8 @@ async def api_tools():
             item.update(
                 method=spec.method,
                 url_template=spec.url_template,
+                graphql=spec.graphql.model_dump() if spec.graphql else None,
+                is_readonly=spec.is_readonly,
                 purpose=spec.purpose,
                 session_id=spec.session_id,
                 inputs=[i.model_dump() for i in spec.inputs],

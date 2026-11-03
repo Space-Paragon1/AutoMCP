@@ -150,9 +150,10 @@ async def _analyze(
     from collections import Counter
     from urllib.parse import urlparse
 
+    from core.analyzer import graphql
     from core.analyzer.endpoint_clusterer import EndpointClusterer
     from core.analyzer.event_classifier import EventClassifier
-    from core.analyzer.tool_spec_builder import LLMProvider, ToolSpecBuilder
+    from core.analyzer.tool_spec_builder import LLMProvider, ToolSpecBuilder, endpoint_key
     from core.storage.db import get_db
 
     provider = (provider or settings.llm_provider).lower()
@@ -183,6 +184,8 @@ async def _analyze(
         raise typer.Exit(1)
 
     console.print(f"Loaded [bold]{len(requests)}[/] requests")
+    # A page may send several GraphQL operations in one call; each can be a tool
+    requests = graphql.split_batches(requests)
 
     classifier = EventClassifier(
         include_pages=include_pages, site_url=session.url, allowed_hosts=allow_host
@@ -216,10 +219,13 @@ async def _analyze(
         clusters = EndpointClusterer().cluster(filtered)
 
     console.print(f"Found [bold]{len(clusters)}[/] unique endpoint clusters")
+    graphql_count = sum(1 for c in clusters if c.graphql)
+    if graphql_count:
+        console.print(f"[dim]{graphql_count} of them are GraphQL operations (one tool each)[/]")
 
     # Approved specs are kept; tool names must stay unique across all sessions
     approved_here = [s for s in all_specs if s.session_id == session_id and s.approved]
-    approved_endpoints = {(s.method, s.url_template) for s in approved_here}
+    approved_endpoints = {endpoint_key(s) for s in approved_here}
     taken_names = {s.tool_name for s in all_specs if s.approved or s.session_id != session_id}
 
     try:
@@ -247,7 +253,7 @@ async def _analyze(
 
     good_specs = [
         s for s in specs
-        if s.confidence >= threshold and (s.method, s.url_template) not in approved_endpoints
+        if s.confidence >= threshold and endpoint_key(s) not in approved_endpoints
     ]
     console.print(
         f"Generated [bold]{len(good_specs)}[/] specs above confidence threshold {threshold:.2f}"

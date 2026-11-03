@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 def utcnow() -> datetime:
@@ -33,6 +33,20 @@ class QualityScore(BaseModel):
             + self.stability * 0.3
             + (1.0 - self.side_effect_risk) * 0.3
         )
+
+
+class GraphQLInfo(BaseModel):
+    """Which GraphQL operation a tool runs. GraphQL sites send every action to
+    one URL, so the operation is what tells their tools apart."""
+    model_config = ConfigDict(frozen=True)
+
+    # The operation's name (GetUser), or the hash of an unnamed or saved query
+    operation: str
+    # "query" (reads), "mutation" (changes data), "subscription", or "unknown"
+    # when only a saved query's hash was recorded
+    kind: str = "unknown"
+    # The page sent it inside a list of operations, so the tool does too
+    batched: bool = False
 
 
 class ToolSpec(BaseModel):
@@ -67,6 +81,9 @@ class ToolSpec(BaseModel):
     # form was on, loaded before each call to read a fresh token.
     csrf_field: str | None = None
     csrf_page: str | None = None
+    # Set for GraphQL calls; request_mapping then holds the operation's fixed
+    # parts (operationName, query, extensions) and its variables ("variables.id")
+    graphql: GraphQLInfo | None = None
 
 
 class CapturedRequest(BaseModel):
@@ -104,6 +121,7 @@ class EndpointCluster(BaseModel):
     representative_request_id: str
     action_labels: list[str] = Field(default_factory=list)
     body_schema: dict | None = None
+    graphql: GraphQLInfo | None = None
 
 
 class GeneratedTool(BaseModel):
