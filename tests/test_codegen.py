@@ -9,11 +9,11 @@ from core.storage.models import ToolInput, ToolSpec
 
 
 def _spec(**kw):
-    base = dict(
-        tool_name="get_board", purpose="Get a board", method="GET",
-        url_template="https://api.example.com/boards/{board_id}", auth_strategy="cookies",
-        inputs=[ToolInput(name="board_id")], session_id="sess",
-    )
+    base = {
+        "tool_name": "get_board", "purpose": "Get a board", "method": "GET",
+        "url_template": "https://api.example.com/boards/{board_id}", "auth_strategy": "cookies",
+        "inputs": [ToolInput(name="board_id")], "session_id": "sess",
+    }
     base.update(kw)
     return ToolSpec(**base)
 

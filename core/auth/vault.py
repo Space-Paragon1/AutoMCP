@@ -17,8 +17,8 @@ def _get_key() -> bytes:
     key_path.write_bytes(key)
     try:
         key_path.chmod(0o600)
-    except Exception:
-        pass
+    except OSError:
+        pass  # Some file systems can't set permissions
     return key
 
 
@@ -40,8 +40,8 @@ class SecretVault:
         self._vault_path.write_bytes(encrypted)
         try:
             self._vault_path.chmod(0o600)
-        except Exception:
-            pass
+        except OSError:
+            pass  # Some file systems can't set permissions
 
     def set(self, key: str, value: str) -> None:
         data = self._load()

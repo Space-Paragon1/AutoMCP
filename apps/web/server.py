@@ -85,11 +85,10 @@ async def dashboard(request: Request):
 @app_web.get("/api/sessions")
 async def api_sessions():
     db = get_db()
-    async with db:
-        async with db.conn.execute(
-            "SELECT id, url, started_at, request_count FROM sessions ORDER BY started_at DESC"
-        ) as cur:
-            rows = await cur.fetchall()
+    async with db, db.conn.execute(
+        "SELECT id, url, started_at, request_count FROM sessions ORDER BY started_at DESC"
+    ) as cur:
+        rows = await cur.fetchall()
     return [{"id": r["id"], "short_id": r["id"][:8], "url": r["url"],
              "started_at": r["started_at"][:19].replace("T", " "),
              "request_count": r["request_count"]} for r in rows]

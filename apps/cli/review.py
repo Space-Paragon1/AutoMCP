@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from rich.console import Console
-from rich.table import Table
-from rich.prompt import Prompt
 from rich.panel import Panel
+from rich.prompt import Prompt
+from rich.table import Table
 
 from core.codegen.naming import to_snake_case
 from core.storage.db import get_db

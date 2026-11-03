@@ -11,7 +11,6 @@ from core.runtime.middleware import ToolError
 from core.storage.db import get_db
 from core.storage.models import CapturedRequest, RecordingSession, ToolInput, ToolSpec
 
-
 # ---------------------------------------------------------------- URL + payload
 
 def test_build_url_fills_and_encodes_placeholders():
@@ -111,11 +110,11 @@ def _fake_api(seen):
 async def test_generate_with_short_session_id_marks_tools_valid():
     from apps.cli.main import _generate
 
-    session, _ = await _seed([dict(
-        tool_name="get_board", purpose="Get a board", method="GET",
-        url_template="https://app.example.com/api/boards/{board_id}",
-        inputs=[ToolInput(name="board_id")],
-    )])
+    session, _ = await _seed([{
+        "tool_name": "get_board", "purpose": "Get a board", "method": "GET",
+        "url_template": "https://app.example.com/api/boards/{board_id}",
+        "inputs": [ToolInput(name="board_id")],
+    }])
     await _generate(session.id[:8], None)
     await _generate(session.id[:8], None)  # running twice must not duplicate records
 
@@ -129,17 +128,17 @@ async def test_served_tools_call_api_with_recorded_login():
     from core.runtime.server import create_server
 
     session, _ = await _seed([
-        dict(tool_name="get_board", purpose="Get a board", method="GET",
-             url_template="https://app.example.com/api/boards/{board_id}",
-             inputs=[ToolInput(name="board_id", description="Board ID"),
-                     ToolInput(name="q", required=False)]),
-        dict(tool_name="create_card", purpose="Create a card", method="POST",
-             url_template="https://app.example.com/api/boards/{board_id}/cards",
-             inputs=[ToolInput(name="board_id"), ToolInput(name="title")],
-             request_mapping={"name": "$input.title"}),
-        dict(tool_name="delete_card", purpose="Delete a card", method="DELETE",
-             url_template="https://app.example.com/api/cards/{card_id}",
-             inputs=[ToolInput(name="card_id")]),
+        {"tool_name": "get_board", "purpose": "Get a board", "method": "GET",
+             "url_template": "https://app.example.com/api/boards/{board_id}",
+             "inputs": [ToolInput(name="board_id", description="Board ID"),
+                     ToolInput(name="q", required=False)]},
+        {"tool_name": "create_card", "purpose": "Create a card", "method": "POST",
+             "url_template": "https://app.example.com/api/boards/{board_id}/cards",
+             "inputs": [ToolInput(name="board_id"), ToolInput(name="title")],
+             "request_mapping": {"name": "$input.title"}},
+        {"tool_name": "delete_card", "purpose": "Delete a card", "method": "DELETE",
+             "url_template": "https://app.example.com/api/cards/{card_id}",
+             "inputs": [ToolInput(name="card_id")]},
     ])
     await _generate(session.id, None)
 
@@ -176,11 +175,11 @@ async def test_expired_login_gives_clear_error():
     from apps.cli.main import _generate
     from core.runtime.tool_loader import ToolLoader
 
-    session, _ = await _seed([dict(
-        tool_name="get_board", purpose="Get a board", method="GET",
-        url_template="https://app.example.com/api/boards/{board_id}",
-        inputs=[ToolInput(name="board_id")],
-    )])
+    session, _ = await _seed([{
+        "tool_name": "get_board", "purpose": "Get a board", "method": "GET",
+        "url_template": "https://app.example.com/api/boards/{board_id}",
+        "inputs": [ToolInput(name="board_id")],
+    }])
     await _generate(session.id, None)
     executor._transport = httpx.MockTransport(lambda r: httpx.Response(401))
 
@@ -259,14 +258,14 @@ async def test_tools_are_found_after_the_project_folder_moves():
     from apps.cli.main import _generate
     from core.config import settings
 
-    session, _ = await _seed([dict(
-        tool_name="get_board", purpose="Get a board", method="GET",
-        url_template="https://app.example.com/api/boards/{board_id}",
-        inputs=[ToolInput(name="board_id")],
-    )])
+    session, _ = await _seed([{
+        "tool_name": "get_board", "purpose": "Get a board", "method": "GET",
+        "url_template": "https://app.example.com/api/boards/{board_id}",
+        "inputs": [ToolInput(name="board_id")],
+    }])
     await _generate(session.id[:8], None)
     async with get_db() as db:
-        [tool] = await db.get_generated_tools()
+        [_tool] = await db.get_generated_tools()
         # Pretend the tool was generated while the project lived somewhere else
         await db.conn.execute(
             "UPDATE generated_tools SET file_path = ?",

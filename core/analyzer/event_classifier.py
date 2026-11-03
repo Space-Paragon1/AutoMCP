@@ -44,17 +44,17 @@ AUTH_FLOW_SEGMENTS = {
 }
 # Endpoints that hand out tokens (".../token", "/cmc-api-token", "/csrf_token").
 # As tools they would give the AI live credentials.
-_CREDENTIAL_SEGMENT = re.compile(r"(^|[-_.])(token|tokens|csrf)$", re.I)
+_CREDENTIAL_SEGMENT = re.compile(r"(^|[-_.])(token|tokens|csrf)$", re.IGNORECASE)
 # A password field in a JSON, URL-encoded or multipart body: a login, sign-up
 # or password change, which must never become a tool
 _PASSWORD_FIELD = re.compile(
     r'"[^"]*pass(?:word|wd)[^"]*"\s*:'
     r"|(?:^|&)[^=&]*pass(?:word|wd)[^=&]*="
     r'|name="[^"]*pass(?:word|wd)[^"]*"',
-    re.I,
+    re.IGNORECASE,
 )
 # Build files with a content hash in the name (opt-in.specrule-0a0e9d38bd18.json)
-_HASHED_FILE = re.compile(r"[.-][0-9a-f]{8,}\.(?:json|js|mjs|css|map|wasm)$", re.I)
+_HASHED_FILE = re.compile(r"[.-][0-9a-f]{8,}\.(?:json|js|mjs|css|map|wasm)$", re.IGNORECASE)
 
 # Playwright resource types that are never API calls
 NON_API_RESOURCE_TYPES = {

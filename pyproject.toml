@@ -28,10 +28,13 @@ dependencies = [
 [project.optional-dependencies]
 # Google Gemini for `automcp analyze` (has a free tier)
 gemini = ["google-genai>=2.0.0"]
+# OpenAI for `automcp analyze --provider openai` (structured outputs need 1.40+)
+openai = ["openai>=1.50.0"]
 dev = [
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",
-    "ruff>=0.4.0",
+    # Pinned: new ruff versions turn on new rules, which would fail the GitHub checks
+    "ruff>=0.17.3,<0.18",
     "mypy>=1.10.0",
 ]
 
@@ -49,3 +52,20 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+ignore = [
+    # `except Exception` is used on purpose where one failure must not stop a
+    # bigger job (a recording, a tool call, a dashboard request); the error is
+    # reported instead
+    "BLE001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Closing the browser and reading page responses is best effort: a failure
+# there must never lose the recording
+"core/recorder/*" = ["S110"]
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer declares command options as argument defaults
+extend-immutable-calls = ["typer.Argument", "typer.Option"]

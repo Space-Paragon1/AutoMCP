@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from typing import Any, Callable, Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC
+from typing import Any
 
 import httpx
 
@@ -65,10 +67,10 @@ def _retry_after_seconds(response: httpx.Response, default: float) -> float:
     except ValueError:
         pass
     try:
+        from datetime import datetime
         from email.utils import parsedate_to_datetime
-        from datetime import datetime, timezone
         when = parsedate_to_datetime(value)
-        return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+        return max(0.0, (when - datetime.now(UTC)).total_seconds())
     except (TypeError, ValueError):
         return default
 

@@ -11,11 +11,10 @@ console = Console()
 
 async def run_sessions() -> None:
     db = get_db()
-    async with db:
-        async with db.conn.execute(
-            "SELECT id, url, started_at, ended_at, request_count FROM sessions ORDER BY started_at DESC"
-        ) as cur:
-            rows = await cur.fetchall()
+    async with db, db.conn.execute(
+        "SELECT id, url, started_at, ended_at, request_count FROM sessions ORDER BY started_at DESC"
+    ) as cur:
+        rows = await cur.fetchall()
 
     if not rows:
         console.print("[dim]No sessions recorded yet.[/]")

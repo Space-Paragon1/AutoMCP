@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """AutoMCP CLI — Browser-to-MCP tool generator."""
 from __future__ import annotations
 
@@ -438,7 +437,7 @@ def test(
 
 
 # ---------------------------------------------------------------------------
-# sessions
+# sessions / delete-session
 # ---------------------------------------------------------------------------
 
 
@@ -447,6 +446,38 @@ def sessions() -> None:
     """List all recorded browser sessions."""
     from apps.cli.sessions import run_sessions
     asyncio.run(run_sessions())
+
+
+@app.command()
+def delete_session(
+    session_ids: list[str] = typer.Argument(..., help="One or more session IDs (the short form works)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before deleting"),
+) -> None:
+    """Delete recordings and everything made from them (specs, tools, saved login)."""
+    from apps.cli.cleanup import run_delete_sessions
+    asyncio.run(run_delete_sessions(session_ids, yes))
+
+
+# ---------------------------------------------------------------------------
+# tools / delete-tool
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def tools() -> None:
+    """List the generated tools."""
+    from apps.cli.cleanup import run_tools
+    asyncio.run(run_tools())
+
+
+@app.command()
+def delete_tool(
+    tool_names: list[str] = typer.Argument(..., help="One or more tool names"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before deleting"),
+) -> None:
+    """Delete generated tools and their specs."""
+    from apps.cli.cleanup import run_delete_tools
+    asyncio.run(run_delete_tools(tool_names, yes))
 
 
 # ---------------------------------------------------------------------------
@@ -521,8 +552,9 @@ def secret_get(
 @app.command()
 def secret_list():
     """List all secret keys stored in the vault."""
-    from core.auth.vault import get_vault
     from rich.table import Table
+
+    from core.auth.vault import get_vault
     keys = get_vault().list_keys()
     if not keys:
         console.print("[dim]No secrets stored.[/]")
@@ -549,8 +581,9 @@ def logs(
 
 
 async def _logs(tool_name: str | None, limit: int) -> None:
-    from core.storage.db import get_db
     from rich.table import Table
+
+    from core.storage.db import get_db
     db = get_db()
     async with db:
         executions = await db.get_executions(tool_name=tool_name, limit=limit)
@@ -820,9 +853,10 @@ def drift_check(
 
 
 async def _drift_check(session_id: str) -> None:
+    from rich.table import Table
+
     from core.analyzer.drift_detector import DriftDetector
     from core.storage.db import get_db
-    from rich.table import Table
 
     db = get_db()
     async with db:

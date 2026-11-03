@@ -20,8 +20,8 @@ import httpx
 
 from core.auth.replay import build_request_headers
 from core.config import settings
-from core.runtime.middleware import RateLimiter, RetryConfig, ToolError, with_retry
 from core.runtime.forms import find_form_token
+from core.runtime.middleware import RateLimiter, RetryConfig, ToolError, with_retry
 from core.runtime.trim import html_to_text, trim_json, trim_text
 
 PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")

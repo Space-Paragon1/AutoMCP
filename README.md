@@ -1,5 +1,7 @@
 # AutoMCP 2.0
 
+[![Tests](https://github.com/Space-Paragon1/AutoMCP/actions/workflows/tests.yml/badge.svg)](https://github.com/Space-Paragon1/AutoMCP/actions/workflows/tests.yml)
+
 **AutoMCP 2.0** turns browser sessions into MCP tools. Record a session on any web app, let an AI (Claude, Gemini or OpenAI) analyze the traffic, review the generated specs, and serve them as production-ready [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) tools — no API docs, no SDKs required.
 
 ---
@@ -50,13 +52,17 @@ Open a terminal in this folder and run `source .venv/bin/activate` first. Do thi
 | Turn a recording into tool specs | `automcp analyze <session_id>` |
 | Approve the specs you want | `automcp review <session_id>` |
 | Write the approved tools to files | `automcp generate <session_id>` |
+| List your tools | `automcp tools` |
 | Try one tool in the terminal | `automcp test <tool_name>` |
+| Delete an old recording and its tools | `automcp delete-session <session_id>` |
+| Delete one tool | `automcp delete-tool <tool_name>` |
 | See past tool calls | `automcp logs` |
 | Open the dashboard | `automcp ui`, then open http://127.0.0.1:7860 in your browser |
 | Get the setup for Claude Code and Claude Desktop | `automcp mcp-config` |
 | Check a recorded login still works | `automcp auth-check <session_id>` |
 | Run the MCP server yourself (for other MCP clients) | `automcp serve` |
 | Run the automated tests | `pytest` |
+| Check code style | `ruff check .` |
 | See every command and option | `automcp --help`, or `automcp <command> --help` |
 
 Claude Code and Claude Desktop start the MCP server themselves, so you don't need `automcp serve` for them.
@@ -163,7 +169,7 @@ In the dashboard you can browse your sessions, approve specs, generate tools, ru
 
 ## Check that everything works
 
-1. **Automated tests:** run `pytest`. All tests should pass in about 20 seconds.
+1. **Automated tests:** run `pytest`. All tests should pass in about 20 seconds. GitHub also runs them, plus `ruff check .`, on every push to `main` (Python 3.11, 3.12 and 3.13). The badge at the top of this page turns red if something fails, and the **Actions** tab on GitHub shows the details.
 2. **A tool from the terminal:** run `automcp test get_pokemon` and type `pikachu`. You should see Pikachu's data.
 3. **The call was logged:** run `automcp logs`. The call from step 2 is listed with status `OK`.
 4. **The dashboard:** [open it](#open-the-dashboard) and check that your sessions and tools appear, and the call from step 2 shows under **Executions**.
@@ -192,6 +198,20 @@ Session IDs are printed after recording. Use the first 8 characters as a shortha
 ```bash
 automcp sessions
 ```
+
+---
+
+### `delete-session` — Delete old recordings
+
+```bash
+automcp delete-session 1ba9148b
+automcp delete-session 1ba9148b 834a2117     # several at once
+automcp delete-session 1ba9148b --yes        # don't ask first
+```
+
+Deletes a recording and everything made from it: its recorded requests, its tool specs, its tool files and its saved login (if you used `auth-login`). It lists what will go and asks before deleting anything. The tool call history in `automcp logs` is kept.
+
+If `automcp serve` is running, or Claude has AutoMCP open, restart it so the deleted tools disappear.
 
 ---
 
@@ -291,6 +311,17 @@ Asks for each input (press Enter to skip an optional one), runs the tool against
 
 ---
 
+### `tools` / `delete-tool` — List and delete tools
+
+```bash
+automcp tools                       # every generated tool, its recording, and whether it reads or changes data
+automcp delete-tool get_pokemon     # asks first; add --yes to skip the question
+```
+
+`delete-tool` removes the tool file and its spec, and leaves the recording alone. To get the tool back, run `automcp analyze` on its recording again, then `review` and `generate`.
+
+---
+
 ### `ui` — Web dashboard
 
 ```bash
@@ -382,7 +413,7 @@ Replays the recorded request for each approved GET endpoint and compares the res
 
 ```bash
 automcp analyze <session_id>                          # uses AUTOMCP_LLM_PROVIDER (default: anthropic)
-automcp analyze <session_id> --provider openai        # requires AUTOMCP_OPENAI_API_KEY and pip install openai
+automcp analyze <session_id> --provider openai        # requires AUTOMCP_OPENAI_API_KEY and pip install -e ".[openai]"
 automcp analyze <session_id> --provider gemini        # requires AUTOMCP_GEMINI_API_KEY and pip install -e ".[gemini]"
 ```
 
@@ -399,12 +430,13 @@ core/
   auth/           Cookies, CSRF, headers, login replay, localStorage/sessionStorage, vault
   codegen/        Jinja2 generator, AST validator, templates/
   runtime/        Request executor, retry/rate limiting, importlib loader, FastMCP server
-  storage/        Pydantic v2 models, aiosqlite database
+  storage/        Pydantic v2 models, aiosqlite database, deleting recordings and tools
 
-tests/            pytest suite (analysis, CLI, codegen safety, runtime, response shortening, login renewal, dashboard)
+tests/            pytest suite (analysis, CLI, codegen safety, runtime, response shortening, login renewal, dashboard, GraphQL, deleting)
+.github/workflows/ GitHub runs ruff and the tests on every push (tests.yml)
 
 apps/
-  cli/            Typer CLI (record, analyze, review, generate, serve, test, ui, ...)
+  cli/            Typer CLI (record, analyze, review, generate, serve, test, tools, delete-session, ui, ...)
   web/            FastAPI dashboard + Jinja2 templates
 
 generated/
