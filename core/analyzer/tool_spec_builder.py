@@ -71,8 +71,9 @@ Rules:
 10. A cluster with a "graphql" section is one GraphQL operation; the site sends all of its
    operations to the same URL. Name the tool after what the operation does (operation
    GetRepoIssues -> list_repo_issues). Map only the operation's variables, as
-   "variables.<name>" (nested with dots: "variables.input.title"). operationName, query and
-   extensions are filled in for you, and method and url_template must stay as given."""
+   "variables.<name>" (nested with dots: "variables.input.title"). Everything else the call
+   sends (operationName, query, extensions, settings such as "features") is filled in for
+   you, and method and url_template must stay as given."""
 
 
 def _object(properties: dict[str, Any]) -> dict[str, Any]:

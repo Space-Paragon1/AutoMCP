@@ -42,6 +42,25 @@ def _create(title="Hi"):
                  "variables": {"input": {"title": title, "repoId": "R_1"}}})
 
 
+# X (Twitter) style: the operation is named in the address, and the request
+# carries only variables and settings, no operation name or query text
+X_USER = "https://x.com/i/api/graphql/Yka-W8dz7RaEuQNkroPkYw/UserByScreenName"
+X_LIKE = "https://x.com/i/api/graphql/lI07N6Otwv1PhnEgXILM7A/FavoriteTweet"
+FEATURES = {"hidden_profile_subscriptions_enabled": True, "verified_phone_label_enabled": False}
+
+
+def _x_user(screen_name="nasa"):
+    return _req(X_USER + "?" + urlencode({
+        "variables": json.dumps({"screen_name": screen_name, "withSafetyModeUserFields": True}),
+        "features": json.dumps(FEATURES),
+    }), response_body=json.dumps({"data": {"user": {"name": screen_name}}}))
+
+
+def _x_like(tweet_id="1"):
+    return _gql({"variables": {"tweet_id": tweet_id}, "queryId": "lI07N6Otwv1PhnEgXILM7A"},
+                url=X_LIKE)
+
+
 # ---------------------------------------------------------------- reading operations
 
 @pytest.mark.parametrize("document,expected", [
@@ -68,7 +87,8 @@ def test_operations_are_found_in_posts_gets_saved_queries_and_batches():
         "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": "ab" * 32}}),
     }))
     [op] = graphql.operations(get)
-    assert op.info.operation == "GetIssues" and op.info.kind == "unknown"
+    # GraphQL over GET may only read, so it's a query even without the query text
+    assert op.info.operation == "GetIssues" and op.info.kind == "query"
     assert op.payload["variables"] == {"repo": "x"}
 
     saved = _gql({"extensions": {"persistedQuery": {"sha256Hash": "cd" * 32}}, "variables": {}})
@@ -80,10 +100,35 @@ def test_operations_are_found_in_posts_gets_saved_queries_and_batches():
     assert ops[0].info.operation.startswith("anonymous_")
 
 
+def test_operations_named_in_the_address_are_found():
+    [op] = graphql.operations(_x_user())
+    # Sent over GET, so it only reads
+    assert op.info == GraphQLInfo(operation="UserByScreenName", kind="query")
+    assert op.payload["variables"] == {"screen_name": "nasa", "withSafetyModeUserFields": True}
+    assert json.loads(op.payload["features"]) == FEATURES  # Kept exactly as the page sent it
+
+    [op] = graphql.operations(_x_like())
+    assert op.info == GraphQLInfo(operation="FavoriteTweet", kind="unknown")
+    assert op.payload["queryId"] == "lI07N6Otwv1PhnEgXILM7A"
+
+    # A name in the request still wins over the address
+    named = _gql({"operationName": "GetIssues", "variables": {}}, url=URL + "/v1")
+    assert graphql.operations(named)[0].info.operation == "GetIssues"
+    # Anonymous queries keep their own names, so they aren't all grouped under "v1"
+    anonymous = _gql({"query": "{ me { id } }"}, url=URL + "/v1")
+    assert graphql.operations(anonymous)[0].info.operation.startswith("anonymous_")
+
+
 def test_ordinary_api_calls_are_not_graphql():
     assert graphql.operations(_req("https://x.com/api/search?query=cats")) is None
     assert graphql.operations(_gql({"query": "cats", "page": 2}, url="https://x.com/api/search")) is None
     assert graphql.operations(_gql({"title": "x"}, url="https://x.com/api/cards")) is None
+    # Variables alone aren't enough without "graphql" in the address
+    assert graphql.operations(_req("https://x.com/api/UserByScreenName?variables={}")) is None
+    assert graphql.operations(_gql({"variables": {}}, url="https://x.com/api/Like")) is None
+    # Nor is an address with "graphql" in it, if the call sends no variables
+    assert graphql.operations(_req(X_USER)) is None
+    assert graphql.operations(_req("https://x.com/graphql/docs/a/b/Intro?variables={}")) is None
 
 
 def test_batches_split_into_one_request_per_operation():
@@ -110,6 +155,16 @@ def test_each_operation_on_one_url_becomes_its_own_cluster():
     assert len(by_op["GetIssues"].request_ids) == 2
     assert by_op["GetIssues"].url_template == URL
     assert by_op["GetIssues"].body_schema == {"repo": "str", "first": "int", "authToken": "str"}
+
+
+def test_operations_named_in_the_address_group_by_operation():
+    clusters = EndpointClusterer().cluster([_x_user("nasa"), _x_user("esa"), _x_like()])
+    by_op = {c.graphql.operation: c for c in clusters}
+    assert set(by_op) == {"UserByScreenName", "FavoriteTweet"}
+    user = by_op["UserByScreenName"]
+    assert len(user.request_ids) == 2
+    # The saved query's ID in the address is kept exactly, not turned into an input
+    assert user.url_template == X_USER and user.method == "GET"
 
 
 def test_graphql_logins_and_token_calls_are_never_tools():
@@ -177,6 +232,67 @@ async def test_specs_run_the_recorded_operation_and_map_only_variables():
     issues_prompt = next(c for c in prompts if c["graphql"]["operation_name"] == "GetIssues")
     assert issues_prompt["graphql"]["operation_type"] == "query"
     assert issues_prompt["representative_request"]["body"] is None
+
+
+async def test_operations_named_in_the_address_become_working_tools():
+    reqs = [_x_user("nasa"), _x_user("esa"), _x_like()]
+    clusters = EndpointClusterer().cluster(reqs)
+
+    def respond(cs):
+        specs = []
+        for c in cs:
+            name = "screen_name" if c["graphql"]["operation_name"] == "UserByScreenName" else "tweet_id"
+            specs.append({
+                **_spec_for(c), "tool_name": "get_user" if name == "screen_name" else "like_post",
+                "inputs": [{"name": name, "type": "string", "required": True, "description": ""}],
+                "request_mapping": [{"field": f"variables.{name}", "value": f"$input.{name}"}],
+            })
+        return json.dumps({"specs": specs}), "end_turn"
+
+    specs = await ToolSpecBuilder(client=FakeAnthropic(respond)).build_specs(
+        clusters, {r.id: r for r in reqs}, "s"
+    )
+    by_name = {s.tool_name: s for s in specs}
+    user, like = by_name["get_user"], by_name["like_post"]
+    assert user.url_template == X_USER and user.method == "GET" and user.is_readonly
+    assert user.request_mapping == {
+        "features": json.dumps(FEATURES),
+        "variables.withSafetyModeUserFields": True,
+        "variables.screen_name": "$input.screen_name",
+    }
+    assert like.request_mapping == {
+        "queryId": "lI07N6Otwv1PhnEgXILM7A", "variables.tweet_id": "$input.tweet_id",
+    }
+    assert not like.is_readonly
+
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": {"ok": True}})
+
+    executor._transport = httpx.MockTransport(handler)
+    fields = ("tool_name", "purpose", "method", "url_template", "inputs", "request_mapping",
+              "graphql", "is_readonly")
+    _, mcp = await _serve([{f: getattr(s, f) for f in fields} for s in (user, like)])
+
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+        assert _field(tools["get_user"].annotations, "read_only_hint", "readOnlyHint") is True
+
+        result = await client.call_tool("get_user", {"screen_name": "jack"})
+        assert json.loads(result.content[0].text) == {"data": {"ok": True}}
+        url = urlparse(str(seen[-1].url))
+        assert url.path == urlparse(X_USER).path
+        params = dict(parse_qsl(url.query))
+        assert json.loads(params["variables"]) == {"withSafetyModeUserFields": True, "screen_name": "jack"}
+        assert params["features"] == json.dumps(FEATURES)  # Sent exactly as recorded
+
+        await client.call_tool("like_post", {"tweet_id": "42"})
+        assert str(seen[-1].url) == X_LIKE
+        assert json.loads(seen[-1].content) == {
+            "queryId": "lI07N6Otwv1PhnEgXILM7A", "variables": {"tweet_id": "42"},
+        }
 
 
 # ---------------------------------------------------------------- running tools

@@ -2,8 +2,9 @@
 
 GraphQL sites send every action to one address (usually /graphql). What a call
 does is named inside the request: an operation name, the query text, or the
-hash of a query the server saved earlier (a "persisted query"). These helpers
-read that, so each operation can become its own tool.
+hash of a query the server saved earlier (a "persisted query"). A few sites,
+such as X, put the operation's name in the address instead. These helpers read
+that, so each operation can become its own tool.
 """
 from __future__ import annotations
 
@@ -96,8 +97,33 @@ def definitions(document: str) -> list[tuple[str, str | None]] | None:
     return [(str(kind), name) for kind, name in ops]
 
 
-def _operation(payload: dict[str, Any], batched: bool) -> Operation | None:
-    """Read one GraphQL operation, or None if *payload* isn't one."""
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _path_operation(url: str) -> str | None:
+    """The operation named in the address, for sites that put it there.
+
+    X (Twitter) calls /i/api/graphql/<queryId>/<OperationName> and sends only
+    variables and settings such as "features": no operation name or query text.
+    """
+    parts = [p for p in urlparse(url).path.split("/") if p]
+    lowered = [p.lower() for p in parts]
+    if "graphql" not in lowered:
+        return None
+    after = parts[lowered.index("graphql") + 1:]
+    if len(after) in (1, 2) and _IDENTIFIER.fullmatch(after[-1]):
+        return after[-1]
+    return None
+
+
+def _operation(
+    payload: dict[str, Any], batched: bool, path_name: str | None = None, over_get: bool = False,
+) -> Operation | None:
+    """Read one GraphQL operation, or None if *payload* isn't one.
+
+    *path_name* is an operation named in the address, used when the request
+    itself doesn't say which operation it is.
+    """
     name = payload.get("operationName")
     name = name if isinstance(name, str) and name else None
     query = payload.get("query")
@@ -105,7 +131,9 @@ def _operation(payload: dict[str, Any], batched: bool) -> Operation | None:
     persisted = extensions.get("persistedQuery") if isinstance(extensions, dict) else None
     saved_hash = persisted.get("sha256Hash") if isinstance(persisted, dict) else None
 
-    kind = "unknown"
+    # GraphQL over GET is only allowed to read, so a call whose query text
+    # wasn't recorded is still known to be a query
+    kind = "query" if over_get else "unknown"
     if isinstance(query, str):
         defs = definitions(query)
         if not defs:
@@ -118,16 +146,21 @@ def _operation(payload: dict[str, Any], batched: bool) -> Operation | None:
             name = "anonymous_" + hashlib.sha256(compact.encode()).hexdigest()[:12]
     elif isinstance(saved_hash, str) and saved_hash:
         name = name or "persisted_" + saved_hash[:12]
-    elif not (name and "variables" in payload):
-        return None
+    else:
+        name = name or path_name
+        if not (name and "variables" in payload):
+            return None
     return Operation(GraphQLInfo(operation=name, kind=kind, batched=batched), payload)
 
 
 def operations(request: CapturedRequest) -> list[Operation] | None:
     """The GraphQL operations a recorded request carries, or None if it isn't a GraphQL call."""
+    path_name = _path_operation(request.url)
     if request.method.upper() == "GET":
         params = dict(parse_qsl(urlparse(request.url).query, keep_blank_values=True))
-        if not {"query", "operationName", "extensions"} & params.keys():
+        if not {"query", "operationName", "extensions"} & params.keys() and not (
+            path_name and "variables" in params
+        ):
             return None
         payload: dict[str, Any] = dict(params)
         for key in ("variables", "extensions"):  # Sent as JSON text in the URL
@@ -136,7 +169,7 @@ def operations(request: CapturedRequest) -> list[Operation] | None:
                     payload[key] = json.loads(payload[key])
                 except ValueError:
                     return None
-        op = _operation(payload, batched=False)
+        op = _operation(payload, batched=False, path_name=path_name, over_get=True)
         return [op] if op else None
 
     if not request.request_body:
@@ -146,7 +179,7 @@ def operations(request: CapturedRequest) -> list[Operation] | None:
     except ValueError:
         return None
     if isinstance(body, dict):
-        op = _operation(body, batched=False)
+        op = _operation(body, batched=False, path_name=path_name)
         return [op] if op else None
     if isinstance(body, list) and body and all(isinstance(item, dict) for item in body):
         ops = [_operation(item, batched=True) for item in body]
