@@ -35,7 +35,31 @@ cp .env.example .env
 
 **No Anthropic credits?** Google Gemini has a free tier. Install `pip install -e ".[gemini]"`, get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey), and set `AUTOMCP_LLM_PROVIDER=gemini`, `AUTOMCP_GEMINI_API_KEY=...` and `AUTOMCP_LLM_MODEL=gemini-flash-latest` in `.env`. Google may use free-tier requests to improve its products, and `analyze` sends recorded traffic (with secrets removed), so avoid recording private sites on the free tier.
 
-Run the tests with `pytest`.
+To check the install, run `pytest` (see [Check that everything works](#check-that-everything-works)).
+
+---
+
+## Everyday commands
+
+Open a terminal in this folder and run `source .venv/bin/activate` first. Do this in every new terminal window, or the `automcp` command won't be found.
+
+| What you want to do | Command |
+|---|---|
+| Record a site | `automcp record https://example.com` |
+| List your recordings | `automcp sessions` |
+| Turn a recording into tool specs | `automcp analyze <session_id>` |
+| Approve the specs you want | `automcp review <session_id>` |
+| Write the approved tools to files | `automcp generate <session_id>` |
+| Try one tool in the terminal | `automcp test <tool_name>` |
+| See past tool calls | `automcp logs` |
+| Open the dashboard | `automcp ui`, then open http://127.0.0.1:7860 in your browser |
+| Get the setup for Claude Code and Claude Desktop | `automcp mcp-config` |
+| Check a recorded login still works | `automcp auth-check <session_id>` |
+| Run the MCP server yourself (for other MCP clients) | `automcp serve` |
+| Run the automated tests | `pytest` |
+| See every command and option | `automcp --help`, or `automcp <command> --help` |
+
+Claude Code and Claude Desktop start the MCP server themselves, so you don't need `automcp serve` for them.
 
 ---
 
@@ -45,13 +69,105 @@ This walkthrough uses [pokeapi.co](https://pokeapi.co), a public site with no lo
 
 1. **Record.** Run `automcp record https://pokeapi.co`. A browser window opens. In the "Try it now" box, type `pokemon/ditto` and click **Submit**. Repeat with `pokemon/pikachu` and `type/3`, then close the browser window. The terminal prints a short session ID, such as `1a2b3c4d`.
 2. **Analyze.** Run `automcp analyze <session_id>`. The AI turns the recorded requests into tool specs. On Gemini's free tier this can take a few minutes.
-3. **Review.** Run `automcp review <session_id>` and answer `approve` for the specs you want.
+3. **Review.** Run `automcp review <session_id>` and answer `approve` for the specs you want. [`review`](#review--approve-specs-interactively) explains what each field means.
 4. **Generate.** Run `automcp generate <session_id>`. This writes the tool files to `generated/tools/`.
-5. **Try a tool.** Run `automcp test <tool_name>` with a name from step 4. It asks for inputs and shows the site's response.
-6. **Use it from Claude.** Run `automcp mcp-config` and follow the printed instructions.
-7. **See it all in the dashboard.** Run `automcp ui`, then open http://127.0.0.1:7860 in your web browser to see your sessions, specs, tools and test runs. Press **Ctrl+C** in the terminal to stop it.
+5. **Try a tool.** Run `automcp test <tool_name>` with a name from step 4, for example `automcp test get_pokemon`. It asks for each input (type `pikachu`), calls the site and shows the response. The response is long, so scroll up to see the top.
+6. **Use it from Claude.** See [Use your tools in Claude](#use-your-tools-in-claude).
+7. **See it all in the dashboard.** See [Open the dashboard](#open-the-dashboard).
 
-If `analyze` reports "No useful requests remain after filtering", the site didn't make any API calls while you recorded. Record again and use the site more, or add `--include-pages` for sites that load whole pages instead of calling an API.
+### A second example: Wikipedia
+
+Wikipedia's search box and link previews call small data APIs, so it turns into tools without logging in.
+
+1. Run `automcp record https://en.wikipedia.org`. Stay logged out.
+2. In the browser, type `Albert Einstein` in the search box at the top and wait for the suggestion list. You don't need to press Enter. Clear it, type `Moon` and click a suggestion. In the article, hold the mouse over a few blue links until a preview card pops up. Then close the browser window.
+3. Run `automcp analyze <session_id>`, `automcp review <session_id>` and `automcp generate <session_id>`.
+
+You should get tools like these (the AI picks the exact names):
+
+| Tool | What it does |
+|---|---|
+| `get_page_summary(title)` | Short summary of an article, like the link preview card |
+| `search_titles(q, limit)` | Title suggestions, like the search box dropdown |
+| `search_pages(q, limit)` | Full-text search inside articles |
+
+Try one with `automcp test get_page_summary` and the title `Moon`.
+
+### Picking a site
+
+Any site works. pokeapi and Wikipedia are just easy places to start.
+
+- **Use the site the way you want the tools to work.** Each kind of action you take (search, open an item, save something) can become a tool.
+- **Privacy.** Passwords, cookies and tokens are removed before `analyze` sends anything to the AI, but the rest of the recorded traffic is sent. On Gemini's free tier, pick sites you don't mind Google seeing.
+- **Sites you log in to work too.** Log in while recording, and the tools reuse that login (see [Auth management](#auth-management)).
+- **"No useful requests remain after filtering"** means the site didn't make any API calls while you recorded. Record again and use the site more, or run `analyze` with `--include-pages` for sites that load whole pages instead of calling an API.
+- **API on another domain?** Keep those calls with `analyze --allow-host api.thatdomain.com`.
+- **Not supported well yet:** sites that send every action to one address (GraphQL). Each action should become its own tool, but today they get grouped together.
+
+---
+
+## Use your tools in Claude
+
+Run `automcp mcp-config`. It prints the setup for both apps, with the paths for your computer filled in. Claude starts the AutoMCP server by itself, so you don't need to run `automcp serve`.
+
+**Claude Code**
+
+1. In this folder, run the `claude mcp add automcp ...` command that `mcp-config` printed.
+2. Start a new Claude Code conversation in this folder. A conversation that was already open won't see the tools. Tools added this way only show up in this folder. To use them in every folder, add `--scope user` right after `claude mcp add`.
+3. Type `/mcp` to check. You should see **automcp ✔ connected**.
+4. To remove it later, run `claude mcp remove automcp -s local` (or `-s user` if you used `--scope user`).
+
+**Claude Desktop**
+
+1. Quit Claude Desktop. It saves its own settings to the same file, so editing while it's open can lose your change.
+2. Open the settings file: `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows. Make a copy of it first.
+3. Add the printed `"automcp"` entry inside `"mcpServers"`. The file may already hold other settings, such as `"preferences"`. Keep those, and add `"mcpServers"` at the top level if it isn't there yet:
+
+   ```json
+   {
+     "preferences": { "...": "your existing settings stay as they are" },
+     "mcpServers": {
+       "automcp": {
+         "command": "/path/printed/by/mcp-config/automcp",
+         "args": ["serve", "--transport", "stdio"],
+         "env": { "AUTOMCP_HOME": "/path/to/this/folder" }
+       }
+     }
+   }
+   ```
+
+4. Open Claude Desktop again. AutoMCP's tools load when it starts.
+
+**Prompts to try** (with the pokeapi and Wikipedia tools above):
+
+- *Use the automcp tools to get the Wikipedia summary for the Moon.*
+- *Use automcp to search Wikipedia titles for "albert ein" and show me the top 3 matches.*
+- *Use automcp to search Wikipedia for "moon landing", pick the most relevant article, get its summary, and explain it in 3 sentences.*
+- *Use automcp to look up Pikachu with get_pokemon, then get Pikachu's Wikipedia summary, and tell me its type and where it comes from.*
+
+The first time Claude uses a tool, it asks your permission.
+
+**Every tool in `generated/tools/` is turned on,** including tools for sites you logged in to. Tools that only read are marked read-only. Tools that change things (create, star, merge, delete) aren't, so Claude asks before running them. To turn a tool off, move its file out of `generated/tools/`, then start a new Claude Code conversation or restart Claude Desktop.
+
+---
+
+## Open the dashboard
+
+1. Run `automcp ui` (after `source .venv/bin/activate`).
+2. When the terminal shows `AutoMCP Dashboard → http://127.0.0.1:7860`, open http://127.0.0.1:7860 in your web browser. It doesn't open by itself.
+3. Keep the terminal open while you use it. Press **Ctrl+C** there to stop it.
+
+In the dashboard you can browse your sessions, approve specs, generate tools, run a tool and see every past call. More in [`ui`](#ui--web-dashboard).
+
+---
+
+## Check that everything works
+
+1. **Automated tests:** run `pytest`. All tests should pass in about 20 seconds.
+2. **A tool from the terminal:** run `automcp test get_pokemon` and type `pikachu`. You should see Pikachu's data.
+3. **The call was logged:** run `automcp logs`. The call from step 2 is listed with status `OK`.
+4. **The dashboard:** [open it](#open-the-dashboard) and check that your sessions and tools appear, and the call from step 2 shows under **Executions**.
+5. **Claude:** in a new Claude Code conversation in this folder, `/mcp` shows **automcp ✔ connected**. Then ask one of the [prompts above](#use-your-tools-in-claude).
 
 ---
 
@@ -107,11 +223,20 @@ automcp review <session_id>
 
 Walk through each spec one by one. For each one you can:
 - `approve` — include it in the next generate run
-- `rename` — change the tool name and purpose
-- `readonly` — mark it as a read-only tool
+- `rename` — change the tool name and purpose (and approve it)
+- `readonly` — mark it as a read-only tool (and approve it)
 - `skip` — exclude it
+- `quit` — stop here; choices you already made are kept
 
 Only approved specs are generated into tools.
+
+What each spec shows:
+- **URL:** the address the tool calls. Parts in braces, like `{title}`, are filled in from the tool's inputs.
+- **Inputs:** `(*)` is required, `(?)` is optional.
+- **Auth:** how the tool sends your recorded login, for example `cookies`.
+- **Confidence:** how sure the AI is that it understood the call. `analyze` drops specs below 0.5.
+- **Quality:** a rough automatic score based on the method, the number of `{...}` parts in the URL and the risk of side effects. Read-only tools top out around 0.74, so 0.6–0.74 is normal for them.
+- **Read-only:** shows `yes` only if you chose `readonly`. GET tools are marked read-only when served anyway, so `no` on a GET tool is fine.
 
 ---
 
@@ -147,7 +272,7 @@ Loads all validated tool files via `importlib` and registers them with a FastMCP
 automcp mcp-config
 ```
 
-It prints a ready-to-paste `claude_desktop_config.json` entry (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`) and the `claude mcp add` command for Claude Code. Both launch `automcp serve --transport stdio` themselves, with `AUTOMCP_HOME` pointing at this folder so the database and tools are found from any directory. Restart Claude Desktop after editing the config.
+It prints a ready-to-paste `claude_desktop_config.json` entry (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`) and the `claude mcp add` command for Claude Code. Both launch `automcp serve --transport stdio` themselves, with `AUTOMCP_HOME` pointing at this folder so the database and tools are found from any directory. Step-by-step setup is in [Use your tools in Claude](#use-your-tools-in-claude).
 
 ---
 
@@ -155,9 +280,12 @@ It prints a ready-to-paste `claude_desktop_config.json` entry (macOS: `~/Library
 
 ```bash
 automcp test <tool_name>
+automcp test get_pokemon     # asks for name_or_id: type pikachu
 ```
 
-Prompts for inputs, executes the tool against the live site using your recorded login, and prints the response. Execution is logged to the database.
+Asks for each input (press Enter to skip an optional one), runs the tool against the live site using your recorded login, and prints the response. Long responses are shortened the same way as for Claude. Each run is logged; see `automcp logs`.
+
+`test` really runs the tool, so a tool that changes things (like creating an issue) makes that change on the site.
 
 ---
 
@@ -206,8 +334,10 @@ Secrets are encrypted with Fernet symmetric encryption. The key lives in `.vault
 
 ```bash
 automcp logs
-automcp logs --tool get_current_member --limit 50
+automcp logs --tool get_page_summary --limit 50
 ```
+
+Shows the most recent tool calls (20 by default) from Claude, `automcp test` and the dashboard, with status and how long each took.
 
 ---
 
@@ -269,7 +399,7 @@ core/
   runtime/        Request executor, retry/rate limiting, importlib loader, FastMCP server
   storage/        Pydantic v2 models, aiosqlite database
 
-tests/            pytest suite (analysis, codegen safety, runtime, login renewal, dashboard)
+tests/            pytest suite (analysis, CLI, codegen safety, runtime, response shortening, login renewal, dashboard)
 
 apps/
   cli/            Typer CLI (record, analyze, review, generate, serve, test, ui, ...)
@@ -286,7 +416,7 @@ generated/
 - No `exec()` — tools load via `importlib.util`
 - Generated tools are thin; request logic lives in one shared runtime, so fixes apply without regenerating
 - Auth is a pluggable strategy engine (cookies, bearer, API key, CSRF)
-- Tool quality scoring: usefulness × stability × side-effect risk
+- Tool quality score: a weighted mix of usefulness, stability and low side-effect risk
 
 ---
 
