@@ -99,6 +99,45 @@ You should get tools like these (the AI picks the exact names):
 
 Try one with `automcp test get_page_summary` and the title `Moon`.
 
+### A third example: GitHub (logged in)
+
+This one uses your GitHub login, so the tools act as you. Some of them only read, and some make real changes to your account: starring repos, opening issues and merging pull requests. Use a test repository of your own for anything that changes things.
+
+1. Run `automcp record https://github.com`. In the browser window that opens, sign in, including any two-factor step. The login itself is never turned into a tool.
+2. Do each thing you want a tool for:
+   - Search for a repository with the search bar at the top.
+   - Open a repository and click the branch dropdown above the file list.
+   - Open one of its issues.
+   - Click **Star**, then click it again to unstar.
+   - Open a new issue (**Issues** → **New issue**) with a title and a short description.
+   - Merge a pull request, but only a test one. A merge can't be undone.
+   - Open your **Pull requests** and **Issues** lists from GitHub's menu.
+
+   Then close the browser window.
+3. Run `automcp analyze <session_id>`, `automcp review <session_id>` and `automcp generate <session_id>`. GitHub makes many background calls (Copilot, page statistics), so `review` shows specs you don't need. Answer `skip` for those.
+
+You should get tools like these (the AI picks the exact names):
+
+| Tool | What it does | Changes your account? |
+|---|---|---|
+| `search_github_repositories(q, type)` | Search GitHub, like the search bar | No |
+| `fetch_repository_sidebar(owner, name)` | A repo's latest release, packages, contributors and languages, like the column on the right of its page | No |
+| `fetch_repository_refs(owner, name, type)` | A repo's branches (`type` = `branch`) or tags, like the branch dropdown | No |
+| `fetch_github_issue(owner, repo, issue_id)` | Details of one issue | No |
+| `fetch_productivity_pulls(q)` | Your pull request lists, filtered with GitHub search words such as `is:open author:YOUR_NAME` | No |
+| `fetch_productivity_issues(q)` | The same for issues, for example `is:open assignee:YOUR_NAME` | No |
+| `star_repository(owner, repository)` | Star a repo | Yes |
+| `unstar_repository(owner, repository)` | Unstar a repo | Yes |
+| `create_github_issue(repositoryId, title, body)` | Open a new issue | Yes |
+| `merge_pull_request(owner, repository, pull_id, ...)` | Merge a pull request. Optional inputs set the merge method (`MERGE`, `SQUASH` or `REBASE`), the commit title and message | Yes, and it can't be undone |
+
+Try a read-only one first: `automcp test fetch_repository_sidebar` with your user name and one of your repos.
+
+- **`create_github_issue` asks for the repository's ID, not its name.** GitHub's issue form sends an internal ID that starts with `R_`. If you have the [GitHub CLI](https://cli.github.com), get it with `gh api repos/OWNER/REPO --jq .node_id`.
+- **`test` makes real changes too.** `automcp test star_repository` really stars the repo, and `automcp test merge_pull_request` really merges.
+- **Recording GitHub again can give duplicates,** such as `star_repository_2` next to `star_repository`. Answer `skip` for them in `review`, or remove one later with `automcp delete-tool star_repository_2`.
+- **If GitHub logs you out,** the tools renew the login by themselves when they can (see [Auth management](#auth-management)).
+
 ### Picking a site
 
 Any site works. pokeapi and Wikipedia are just easy places to start.
@@ -144,12 +183,15 @@ Run `automcp mcp-config`. It prints the setup for both apps, with the paths for 
 
 4. Open Claude Desktop again. AutoMCP's tools load when it starts.
 
-**Prompts to try** (with the pokeapi and Wikipedia tools above):
+**Prompts to try** (with the tools from the examples above):
 
 - *Use the automcp tools to get the Wikipedia summary for the Moon.*
 - *Use automcp to search Wikipedia titles for "albert ein" and show me the top 3 matches.*
 - *Use automcp to search Wikipedia for "moon landing", pick the most relevant article, get its summary, and explain it in 3 sentences.*
 - *Use automcp to look up Pikachu with get_pokemon, then get Pikachu's Wikipedia summary, and tell me its type and where it comes from.*
+- *Use automcp to list the branches of OWNER/REPO on GitHub and tell me its main languages.*
+- *Use automcp to show my open GitHub pull requests.*
+- *Use automcp to star OWNER/REPO on GitHub.* (This one changes your account, so Claude asks first.)
 
 The first time Claude uses a tool, it asks your permission.
 
